@@ -29,7 +29,7 @@ import com.leitian.cfdashboard.ui.viewmodel.MainViewModel
 @Composable
 fun HomeScreen(
     viewModel: MainViewModel,
-    onAppClick: (String, String) -> Unit,
+    onAppClick: (String, String, Boolean) -> Unit,
     onLogout: () -> Unit
 ) {
     val apps by viewModel.apps.collectAsState()
@@ -206,7 +206,7 @@ fun HomeScreen(
                     }
                 } else {
                     items(filtered) { app ->
-                        AppListItem(app) { onAppClick(app.id, app.name) }
+                        AppListItem(app) { onAppClick(app.id, app.name, app.isPages) }
                     }
                 }
             }
