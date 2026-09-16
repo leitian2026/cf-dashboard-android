@@ -42,8 +42,8 @@ fun AppNavigation() {
         composable("home") {
             HomeScreen(
                 viewModel = viewModel,
-                onAppClick = { id, name ->
-                    navController.navigate("detail/$id/$name")
+                onAppClick = { id, name, isPages ->
+                    navController.navigate("detail/$id/$name/$isPages")
                 },
                 onLogout = {
                     viewModel.logout()
@@ -54,17 +54,20 @@ fun AppNavigation() {
             )
         }
         composable(
-            route = "detail/{appId}/{appName}",
+            route = "detail/{appId}/{appName}/{isPages}",
             arguments = listOf(
                 navArgument("appId") { type = NavType.StringType },
-                navArgument("appName") { type = NavType.StringType }
+                navArgument("appName") { type = NavType.StringType },
+                navArgument("isPages") { type = NavType.BoolType }
             )
         ) { entry ->
             val appId = entry.arguments?.getString("appId") ?: ""
             val appName = entry.arguments?.getString("appName") ?: ""
+            val isPages = entry.arguments?.getBoolean("isPages") ?: false
             WorkerDetailScreen(
                 appId = appId,
                 appName = appName,
+                isPages = isPages,
                 viewModel = viewModel,
                 onBack = { navController.popBackStack() }
             )
