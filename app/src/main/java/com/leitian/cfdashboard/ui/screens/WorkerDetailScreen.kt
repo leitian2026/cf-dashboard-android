@@ -63,11 +63,30 @@ fun WorkerDetailScreen(
     val filePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
-        uri?.let { viewModel.uploadScript(appName, it, context) }
+        // 选中后进入 Selected 状态，弹出确认对话框，不立即上传
+        uri?.let { viewModel.onScriptSelected(it, context) }
     }
 
     LaunchedEffect(appName) { viewModel.loadDetail(appName) }
     DisposableEffect(Unit) { onDispose { viewModel.clearDetail() } }
+
+    // 选中文件后的确认对话框
+    if (uploadState is MainViewModel.UploadState.Selected) {
+        val selected = uploadState as MainViewModel.UploadState.Selected
+        AlertDialog(
+            onDismissRequest = { viewModel.clearUploadState() },
+            title = { Text("确认上传") },
+            text = { Text("确认上传 ${selected.fileName} 并部署到「$appName」吗？") },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.confirmUploadScript(appName, context)
+                }) { Text("确认上传") }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.clearUploadState() }) { Text("取消") }
+            }
+        )
+    }
 
     // 上传结果提示
     if (uploadState is MainViewModel.UploadState.Success || uploadState is MainViewModel.UploadState.Error) {
@@ -445,9 +464,7 @@ private fun BindingsTab(scriptInfo: CloudflareApi.ScriptInfo?, settingsDetail: W
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
             ) {
                 Column(Modifier.padding(16.dp)) {
-                    Text("Bindings 数量", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(Modifier.height(4.dp))
-                    Text("${scriptInfo?.bindingCount ?: 0}", fontWeight = FontWeight.Bold, fontSize = 24.sp)
+                    Text("暂无绑定", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         } else {
@@ -457,11 +474,10 @@ private fun BindingsTab(scriptInfo: CloudflareApi.ScriptInfo?, settingsDetail: W
                     shape = RoundedCornerShape(12.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                 ) {
-                    Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(b.name, fontWeight = FontWeight.Medium, fontSize = 15.sp)
-                            Text(b.type, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
+                    Column(Modifier.padding(16.dp)) {
+                        Text(b.name, fontWeight = FontWeight.Medium, fontSize = 15.sp)
+                        Spacer(Modifier.height(4.dp))
+                        Text(b.type, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
@@ -481,34 +497,14 @@ private fun ObservabilityTab(scriptInfo: CloudflareApi.ScriptInfo?) {
             shape = RoundedCornerShape(12.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
         ) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Workers Logs", Modifier.weight(1f), fontSize = 14.sp)
-                    Surface(
-                        shape = RoundedCornerShape(4.dp),
-                        color = if (scriptInfo?.logsEnabled == true) Color(0xFFE6F4EA) else Color(0xFFF5F5F5)
-                    ) {
-                        Text(
-                            if (scriptInfo?.logsEnabled == true) "已启用" else "已禁用",
-                            fontSize = 12.sp,
-                            color = if (scriptInfo?.logsEnabled == true) Color(0xFF137333) else Color.Gray,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-                        )
-                    }
+                    Text("Logs", Modifier.weight(1f), fontSize = 14.sp)
+                    Text(if (scriptInfo?.logsEnabled == true) "已启用" else "未启用", fontSize = 14.sp)
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Workers Traces", Modifier.weight(1f), fontSize = 14.sp)
-                    Surface(
-                        shape = RoundedCornerShape(4.dp),
-                        color = if (scriptInfo?.tracesEnabled == true) Color(0xFFE6F4EA) else Color(0xFFF5F5F5)
-                    ) {
-                        Text(
-                            if (scriptInfo?.tracesEnabled == true) "已启用" else "已禁用",
-                            fontSize = 12.sp,
-                            color = if (scriptInfo?.tracesEnabled == true) Color(0xFF137333) else Color.Gray,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-                        )
-                    }
+                    Text("Traces", Modifier.weight(1f), fontSize = 14.sp)
+                    Text(if (scriptInfo?.tracesEnabled == true) "已启用" else "未启用", fontSize = 14.sp)
                 }
             }
         }
@@ -516,78 +512,27 @@ private fun ObservabilityTab(scriptInfo: CloudflareApi.ScriptInfo?) {
 }
 
 @Composable
-private fun BindingDiagram(
-    appName: String,
-    bindingCount: Int,
-    logsEnabled: Boolean,
-    tracesEnabled: Boolean
-) {
+private fun BindingDiagram(appName: String, bindingCount: Int, logs: Boolean, traces: Boolean) {
     Card(
         Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
-        Row(
-            Modifier.fillMaxWidth().padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Surface(shape = RoundedCornerShape(8.dp), color = Color(0xFFF5F5F5)) {
-                    Text("绑定 $bindingCount", Modifier.padding(horizontal = 10.dp, vertical = 6.dp), fontSize = 12.sp)
+        Column(Modifier.padding(16.dp)) {
+            Text("绑定关系", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+            Spacer(Modifier.height(12.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier.size(48.dp).clip(CircleShape).background(Color(0xFFE8F0FE)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("W", fontWeight = FontWeight.Bold, color = Color(0xFF1A73E8))
                 }
-                Surface(shape = RoundedCornerShape(8.dp), color = Color(0xFFF5F5F5)) {
-                    Text("Workers —", Modifier.padding(horizontal = 10.dp, vertical = 6.dp), fontSize = 12.sp)
-                }
-                Surface(shape = RoundedCornerShape(8.dp), color = Color(0xFFF5F5F5)) {
-                    Text("Queues —", Modifier.padding(horizontal = 10.dp, vertical = 6.dp), fontSize = 12.sp)
-                }
-            }
-            Spacer(Modifier.width(12.dp))
-            Text("→", fontSize = 18.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(Modifier.width(12.dp))
-            Card(
-                shape = RoundedCornerShape(10.dp),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFFF8F9FA)),
-                modifier = Modifier.weight(1f)
-            ) {
-                Column(Modifier.padding(12.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("◇ $appName", fontWeight = FontWeight.Medium, fontSize = 13.sp)
-                        Spacer(Modifier.weight(1f))
-                        Box(Modifier.size(8.dp).clip(CircleShape).background(Color(0xFF3B82F6)))
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    Text("Observability", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(Modifier.height(4.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("Workers Logs", fontSize = 12.sp, modifier = Modifier.weight(1f))
-                        Surface(
-                            shape = RoundedCornerShape(4.dp),
-                            color = if (logsEnabled) Color(0xFFE6F4EA) else Color(0xFFF0F0F0)
-                        ) {
-                            Text(
-                                if (logsEnabled) "已启用" else "已禁用",
-                                fontSize = 11.sp,
-                                color = if (logsEnabled) Color(0xFF137333) else Color.Gray,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                            )
-                        }
-                    }
-                    Spacer(Modifier.height(2.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("Workers Traces", fontSize = 12.sp, modifier = Modifier.weight(1f))
-                        Surface(
-                            shape = RoundedCornerShape(4.dp),
-                            color = if (tracesEnabled) Color(0xFFE6F4EA) else Color(0xFFF0F0F0)
-                        ) {
-                            Text(
-                                if (tracesEnabled) "已启用" else "已禁用",
-                                fontSize = 11.sp,
-                                color = if (tracesEnabled) Color(0xFF137333) else Color.Gray,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                            )
-                        }
-                    }
+                Spacer(Modifier.width(12.dp))
+                Column {
+                    Text(appName, fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                    Text("$bindingCount bindings · Logs: ${if (logs) "on" else "off"} · Traces: ${if (traces) "on" else "off"}",
+                        fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }
@@ -595,7 +540,7 @@ private fun BindingDiagram(
 }
 
 @Composable
-private fun MetricCard(title: String, value: String, points: List<Float>, lineColor: Color) {
+private fun MetricCard(title: String, value: String, points: List<Float>, color: Color) {
     Card(
         Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
@@ -607,7 +552,7 @@ private fun MetricCard(title: String, value: String, points: List<Float>, lineCo
             Text(value, fontWeight = FontWeight.Bold, fontSize = 28.sp)
             Spacer(Modifier.height(12.dp))
             if (points.isNotEmpty()) {
-                SimpleLineChart(points, lineColor, Modifier.fillMaxWidth().height(40.dp))
+                SimpleLineChart(points, color, Modifier.fillMaxWidth().height(40.dp))
             } else {
                 Box(Modifier.fillMaxWidth().height(40.dp).background(Color(0xFFFAFAFA), RoundedCornerShape(4.dp)))
             }
@@ -616,21 +561,17 @@ private fun MetricCard(title: String, value: String, points: List<Float>, lineCo
 }
 
 @Composable
-private fun SimpleLineChart(points: List<Float>, lineColor: Color, modifier: Modifier = Modifier) {
+private fun SimpleLineChart(points: List<Float>, color: Color, modifier: Modifier = Modifier) {
     if (points.isEmpty()) return
-    Canvas(modifier = modifier) {
-        val w = size.width
-        val h = size.height
-        val max = points.maxOrNull() ?: 1f
-        val min = points.minOrNull() ?: 0f
-        val range = (max - min).coerceAtLeast(0.001f)
+    Canvas(modifier) {
+        val maxV = points.maxOrNull()?.coerceAtLeast(1f) ?: 1f
+        val stepX = size.width / (points.size - 1).coerceAtLeast(1)
         val path = Path()
         points.forEachIndexed { i, v ->
-            val x = i * w / (points.size - 1).coerceAtLeast(1)
-            val y = h - ((v - min) / range) * h
+            val x = i * stepX
+            val y = size.height - (v / maxV) * size.height * 0.9f
             if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
         }
-        drawPath(path, lineColor.copy(alpha = 0.12f), style = Stroke(width = 6f))
-        drawPath(path, lineColor, style = Stroke(width = 2.5f))
+        drawPath(path, color, style = Stroke(width = 2.dp.toPx()))
     }
 }

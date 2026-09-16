@@ -74,9 +74,11 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
     private val _tabLoading = MutableStateFlow(false)
     val tabLoading: StateFlow<Boolean> = _tabLoading.asStateFlow()
 
-    // 上传部署状态
+    // 上传部署状态机：Idle → Selected → Loading → Success/Error
     sealed class UploadState {
         object Idle : UploadState()
+        /** 已选中文件，等待用户确认 */
+        data class Selected(val uri: Uri, val fileName: String) : UploadState()
         object Loading : UploadState()
         data class Success(val message: String = "部署成功") : UploadState()
         data class Error(val message: String) : UploadState()
@@ -235,9 +237,40 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
     }
 
     /**
-     * 从手机选择的文件上传并部署 Worker 脚本
+     * 用户选中文件后调用：只解析文件名，进入 Selected 状态，弹出确认对话框。
+     * 不立即上传。
      */
-    fun uploadScript(scriptName: String, uri: Uri, context: Context) {
+    fun onScriptSelected(uri: Uri, context: Context) {
+        var fileName = "worker.js"
+        try {
+            context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if (nameIndex >= 0 && cursor.moveToFirst()) {
+                    val name = cursor.getString(nameIndex)
+                    if (!name.isNullOrBlank()) fileName = name
+                }
+            }
+        } catch (_: Exception) { /* 保持默认名 */ }
+        _uploadState.value = UploadState.Selected(uri, fileName)
+    }
+
+    /**
+     * 用户在确认对话框点「确认」后调用：真正开始上传。
+     */
+    fun confirmUploadScript(scriptName: String, context: Context) {
+        val selected = _uploadState.value as? UploadState.Selected ?: return
+        doUploadScript(scriptName, selected.uri, selected.fileName, context)
+    }
+
+    /**
+     * 真正执行上传并部署 Worker 脚本
+     */
+    private fun doUploadScript(
+        scriptName: String,
+        uri: Uri,
+        fileName: String,
+        context: Context
+    ) {
         val e = email
         val k = apiKey
         val a = accountId
@@ -252,15 +285,6 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
                 if (bytes == null || bytes.isEmpty()) {
                     _uploadState.value = UploadState.Error("无法读取文件或文件为空")
                     return@launch
-                }
-
-                var fileName = "worker.js"
-                context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-                    val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                    if (nameIndex >= 0 && cursor.moveToFirst()) {
-                        val name = cursor.getString(nameIndex)
-                        if (!name.isNullOrBlank()) fileName = name
-                    }
                 }
 
                 val result = CloudflareApi.uploadWorkerScript(e, k, a, scriptName, fileName, bytes)
