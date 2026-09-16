@@ -22,7 +22,6 @@ object CloudflareApi {
 
     private val client: OkHttpClient by lazy {
         val logging = HttpLoggingInterceptor().apply {
-            // BODY 才能在 Logcat 看到 GraphQL 真实错误内容
             level = HttpLoggingInterceptor.Level.BODY
         }
         OkHttpClient.Builder()
@@ -96,6 +95,17 @@ object CloudflareApi {
 
     private fun truncate(s: String, max: Int = 300): String {
         return if (s.length <= max) s else s.take(max) + "..."
+    }
+
+    /**
+     * Cloudflare GraphQL 成功时经常返回 "errors": null
+     * json.has("errors") 在 errors=null 时也是 true，必须再判断非 null 且数组长度>0
+     */
+    private fun graphQlHasRealErrors(json: JSONObject): String? {
+        if (!json.has("errors") || json.isNull("errors")) return null
+        val errArr = json.optJSONArray("errors") ?: return null
+        if (errArr.length() == 0) return null
+        return errArr.optJSONObject(0)?.optString("message") ?: "GraphQL error"
     }
 
     suspend fun verifyGlobalKey(email: String, apiKey: String): ApiResult<Account> =
@@ -179,7 +189,6 @@ object CloudflareApi {
             }
         }
 
-    /** 账号级最近 24h 汇总（列表页顶部统计） */
     suspend fun getAccountStats(
         email: String,
         apiKey: String,
@@ -216,21 +225,14 @@ object CloudflareApi {
             val resp = client.newCall(req).execute()
             val body = resp.body?.string() ?: ""
 
-            // 不再静默吞错：HTTP 失败直接带错误信息返回
             if (!resp.isSuccessful) {
-                return@withContext ApiResult(
-                    false,
-                    error = "HTTP ${resp.code}: ${truncate(body)}"
-                )
+                return@withContext ApiResult(false, error = "HTTP ${resp.code}: ${truncate(body)}")
             }
 
             val json = JSONObject(body)
 
-            // GraphQL 业务错误也要暴露
-            if (json.has("errors")) {
-                val errArr = json.optJSONArray("errors")
-                val msg = errArr?.optJSONObject(0)?.optString("message")
-                    ?: truncate(body)
+            // 关键：errors:null 不算错误
+            graphQlHasRealErrors(json)?.let { msg ->
                 return@withContext ApiResult(false, error = "GraphQL: $msg")
             }
 
@@ -254,20 +256,19 @@ object CloudflareApi {
                 errors += sum?.optLong("errors") ?: 0L
                 val cpuUs = q?.optDouble("cpuTimeP50") ?: 0.0
                 if (cpuUs > 0) {
+                    // Cloudflare 返回的是微秒
                     cpuSum += cpuUs / 1000.0
                     cpuCount++
                 }
             }
 
             val avgCpu = if (cpuCount > 0) cpuSum / cpuCount else 0.0
-            // 真正没流量：success=true, data 全 0, error=null
             ApiResult(true, AccountStats(requests, errors, avgCpu))
         } catch (e: Exception) {
             ApiResult(false, error = e.message ?: "网络错误")
         }
     }
 
-    /** 单个 Worker 最近 24h 真实指标 */
     suspend fun getWorkerMetrics(
         email: String,
         apiKey: String,
@@ -315,17 +316,12 @@ object CloudflareApi {
             val body = resp.body?.string() ?: ""
 
             if (!resp.isSuccessful) {
-                return@withContext ApiResult(
-                    false,
-                    error = "HTTP ${resp.code}: ${truncate(body)}"
-                )
+                return@withContext ApiResult(false, error = "HTTP ${resp.code}: ${truncate(body)}")
             }
 
             val json = JSONObject(body)
 
-            if (json.has("errors")) {
-                val msg = json.optJSONArray("errors")?.optJSONObject(0)?.optString("message")
-                    ?: truncate(body)
+            graphQlHasRealErrors(json)?.let { msg ->
                 return@withContext ApiResult(false, error = "GraphQL: $msg")
             }
 
