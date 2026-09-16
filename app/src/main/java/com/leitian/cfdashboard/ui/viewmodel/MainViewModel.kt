@@ -24,8 +24,14 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
     private val _apps = MutableStateFlow<List<CloudflareApi.AppItem>>(emptyList())
     val apps: StateFlow<List<CloudflareApi.AppItem>> = _apps.asStateFlow()
 
+    private val _accountStats = MutableStateFlow<CloudflareApi.AccountStats?>(null)
+    val accountStats: StateFlow<CloudflareApi.AccountStats?> = _accountStats.asStateFlow()
+
     private val _metrics = MutableStateFlow<CloudflareApi.WorkerMetrics?>(null)
     val metrics: StateFlow<CloudflareApi.WorkerMetrics?> = _metrics.asStateFlow()
+
+    private val _scriptInfo = MutableStateFlow<CloudflareApi.ScriptInfo?>(null)
+    val scriptInfo: StateFlow<CloudflareApi.ScriptInfo?> = _scriptInfo.asStateFlow()
 
     private val _metricsLoading = MutableStateFlow(false)
     val metricsLoading: StateFlow<Boolean> = _metricsLoading.asStateFlow()
@@ -43,6 +49,7 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
                 accountId = a
                 _isLoggedIn.value = true
                 loadApps()
+                loadAccountStats()
             }
         }
     }
@@ -65,6 +72,7 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
                 tokenStore.save(e, k, result.data.id, result.data.name)
                 _isLoggedIn.value = true
                 loadApps()
+                loadAccountStats()
             } else {
                 _loginError.value = result.error ?: "登录失败"
             }
@@ -86,23 +94,44 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
         }
     }
 
-    fun loadMetrics(scriptName: String) {
+    fun loadAccountStats() {
+        val e = email ?: return
+        val k = apiKey ?: return
+        val a = accountId ?: return
+        viewModelScope.launch {
+            val result = CloudflareApi.getAccountStats(e, k, a)
+            if (result.success) {
+                _accountStats.value = result.data
+            }
+        }
+    }
+
+    fun loadDetail(scriptName: String) {
         val e = email ?: return
         val k = apiKey ?: return
         val a = accountId ?: return
         viewModelScope.launch {
             _metricsLoading.value = true
             _metrics.value = null
-            val result = CloudflareApi.getWorkerMetrics(e, k, a, scriptName)
-            if (result.success) {
-                _metrics.value = result.data
+            _scriptInfo.value = null
+
+            val metricsResult = CloudflareApi.getWorkerMetrics(e, k, a, scriptName)
+            if (metricsResult.success) {
+                _metrics.value = metricsResult.data
             }
+
+            val infoResult = CloudflareApi.getScriptInfo(e, k, a, scriptName)
+            if (infoResult.success) {
+                _scriptInfo.value = infoResult.data
+            }
+
             _metricsLoading.value = false
         }
     }
 
-    fun clearMetrics() {
+    fun clearDetail() {
         _metrics.value = null
+        _scriptInfo.value = null
     }
 
     fun logout() {
@@ -113,7 +142,9 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
             accountId = null
             _isLoggedIn.value = false
             _apps.value = emptyList()
+            _accountStats.value = null
             _metrics.value = null
+            _scriptInfo.value = null
         }
     }
 }

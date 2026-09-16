@@ -34,6 +34,7 @@ fun HomeScreen(
 ) {
     val apps by viewModel.apps.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
+    val stats by viewModel.accountStats.collectAsState()
     var searchQuery by remember { mutableStateOf("") }
 
     val filtered = if (searchQuery.isBlank()) apps
@@ -78,7 +79,13 @@ fun HomeScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 item { BillingCard() }
-                item { PeriodStats() }
+                item {
+                    PeriodStats(
+                        requests = stats?.let { CloudflareApi.formatCount(it.requests) } ?: "—",
+                        cpu = stats?.let { CloudflareApi.formatCpu(it.cpuTimeMs) } ?: "—",
+                        errors = stats?.errors?.toString() ?: "—"
+                    )
+                }
 
                 item {
                     OutlinedTextField(
@@ -150,17 +157,17 @@ private fun BillingCard() {
 }
 
 @Composable
-private fun PeriodStats() {
+private fun PeriodStats(requests: String, cpu: String, errors: String) {
     Column {
-        Text("最近 30 天", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 8.dp))
+        Text("最近 24 小时", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 8.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            StatCard("请求", "—", Modifier.weight(1f))
-            StatCard("CPU 时间", "—", Modifier.weight(1f))
+            StatCard("请求", requests, Modifier.weight(1f))
+            StatCard("CPU 时间", cpu, Modifier.weight(1f))
         }
         Spacer(Modifier.height(8.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            StatCard("可观测性事件", "—", Modifier.weight(1f))
-            StatCard("Workers 构建时间", "—", Modifier.weight(1f))
+            StatCard("错误", errors, Modifier.weight(1f))
+            StatCard("Workers 数量", "—", Modifier.weight(1f))
         }
     }
 }

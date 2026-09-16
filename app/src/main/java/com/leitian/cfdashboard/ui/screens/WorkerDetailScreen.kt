@@ -36,14 +36,15 @@ fun WorkerDetailScreen(
     val tabs = listOf("概述", "指标", "部署", "绑定", "Observability", "域", "Access", "设置")
 
     val metrics by viewModel.metrics.collectAsState()
+    val scriptInfo by viewModel.scriptInfo.collectAsState()
     val metricsLoading by viewModel.metricsLoading.collectAsState()
 
     LaunchedEffect(appName) {
-        viewModel.loadMetrics(appName)
+        viewModel.loadDetail(appName)
     }
 
     DisposableEffect(Unit) {
-        onDispose { viewModel.clearMetrics() }
+        onDispose { viewModel.clearDetail() }
     }
 
     Scaffold(
@@ -92,7 +93,8 @@ fun WorkerDetailScreen(
                 Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                // 域名信息
+                val domain = scriptInfo?.subdomain ?: "$appName.workers.dev"
+
                 Card(
                     Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(12.dp),
@@ -106,7 +108,7 @@ fun WorkerDetailScreen(
                         Spacer(Modifier.width(8.dp))
                         Column(Modifier.weight(1f)) {
                             Text(
-                                "$appName.workers.dev",
+                                domain,
                                 fontWeight = FontWeight.Medium,
                                 fontSize = 14.sp,
                                 color = MaterialTheme.colorScheme.secondary
@@ -120,7 +122,12 @@ fun WorkerDetailScreen(
                     }
                 }
 
-                BindingDiagram(appName)
+                BindingDiagram(
+                    appName = appName,
+                    bindingCount = scriptInfo?.bindingCount ?: 0,
+                    logsEnabled = scriptInfo?.logsEnabled ?: false,
+                    tracesEnabled = scriptInfo?.tracesEnabled ?: false
+                )
 
                 Row(
                     Modifier.fillMaxWidth(),
@@ -144,23 +151,24 @@ fun WorkerDetailScreen(
                 }
 
                 val m = metrics
-                val reqValue = if (m != null) CloudflareApi.formatCount(m.totalRequests) else if (metricsLoading) "..." else "0"
-                val cpuValue = if (m != null) CloudflareApi.formatCpu(m.cpuTimeMs) else if (metricsLoading) "..." else "0 ms"
-                val errValue = if (m != null) m.totalErrors.toString() else if (metricsLoading) "..." else "0"
+                val reqValue = when {
+                    metricsLoading && m == null -> "..."
+                    m != null -> CloudflareApi.formatCount(m.totalRequests)
+                    else -> "0"
+                }
+                val cpuValue = when {
+                    metricsLoading && m == null -> "..."
+                    m != null -> CloudflareApi.formatCpu(m.cpuTimeMs)
+                    else -> "0 ms"
+                }
+                val errValue = when {
+                    metricsLoading && m == null -> "..."
+                    m != null -> m.totalErrors.toString()
+                    else -> "0"
+                }
 
-                MetricCard(
-                    title = "调用次数",
-                    value = reqValue,
-                    points = m?.requestPoints ?: emptyList(),
-                    lineColor = Color(0xFF3B82F6)
-                )
-
-                MetricCard(
-                    title = "CPU 时间",
-                    value = cpuValue,
-                    points = m?.cpuPoints ?: emptyList(),
-                    lineColor = Color(0xFF3B82F6)
-                )
+                MetricCard("调用次数", reqValue, m?.requestPoints ?: emptyList(), Color(0xFF3B82F6))
+                MetricCard("CPU 时间", cpuValue, m?.cpuPoints ?: emptyList(), Color(0xFF3B82F6))
 
                 Card(
                     Modifier.fillMaxWidth(),
@@ -173,11 +181,7 @@ fun WorkerDetailScreen(
                         Text(errValue, fontWeight = FontWeight.Bold, fontSize = 28.sp)
                         Spacer(Modifier.height(12.dp))
                         if (m != null && m.errorPoints.isNotEmpty()) {
-                            SimpleLineChart(
-                                points = m.errorPoints,
-                                lineColor = Color(0xFFEF4444),
-                                modifier = Modifier.fillMaxWidth().height(40.dp)
-                            )
+                            SimpleLineChart(m.errorPoints, Color(0xFFEF4444), Modifier.fillMaxWidth().height(40.dp))
                         } else {
                             Box(
                                 Modifier.fillMaxWidth().height(40.dp)
@@ -194,7 +198,12 @@ fun WorkerDetailScreen(
 }
 
 @Composable
-private fun BindingDiagram(appName: String) {
+private fun BindingDiagram(
+    appName: String,
+    bindingCount: Int,
+    logsEnabled: Boolean,
+    tracesEnabled: Boolean
+) {
     Card(
         Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
@@ -203,7 +212,7 @@ private fun BindingDiagram(appName: String) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    BindingChip("域  —")
+                    BindingChip("绑定  $bindingCount")
                     BindingChip("Workers  —")
                     BindingChip("Queues  —")
                 }
@@ -231,13 +240,13 @@ private fun BindingDiagram(appName: String) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text("Workers Logs", fontSize = 12.sp)
                             Spacer(Modifier.weight(1f))
-                            StatusChip("已启用", true)
+                            StatusChip(if (logsEnabled) "已启用" else "已禁用", logsEnabled)
                         }
                         Spacer(Modifier.height(2.dp))
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text("Workers Traces", fontSize = 12.sp)
                             Spacer(Modifier.weight(1f))
-                            StatusChip("已禁用", false)
+                            StatusChip(if (tracesEnabled) "已启用" else "已禁用", tracesEnabled)
                         }
                     }
                 }
@@ -279,18 +288,14 @@ private fun MetricCard(title: String, value: String, points: List<Float>, lineCo
             Text(value, fontWeight = FontWeight.Bold, fontSize = 28.sp)
             Spacer(Modifier.height(12.dp))
             if (points.isNotEmpty()) {
-                SimpleLineChart(
-                    points = points,
-                    lineColor = lineColor,
-                    modifier = Modifier.fillMaxWidth().height(80.dp)
-                )
+                SimpleLineChart(points, lineColor, Modifier.fillMaxWidth().height(80.dp))
             } else {
                 Box(
                     Modifier.fillMaxWidth().height(80.dp)
                         .background(Color(0xFFFAFAFA), RoundedCornerShape(4.dp)),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text("暂无数据", fontSize = 12.sp, color = Color.Gray)
+                    Text("暂无调用数据", fontSize = 12.sp, color = Color.Gray)
                 }
             }
         }

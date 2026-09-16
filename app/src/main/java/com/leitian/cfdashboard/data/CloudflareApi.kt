@@ -26,8 +26,8 @@ object CloudflareApi {
         }
         OkHttpClient.Builder()
             .addInterceptor(logging)
-            .connectTimeout(20, TimeUnit.SECONDS)
-            .readTimeout(30, TimeUnit.SECONDS)
+            .connectTimeout(25, TimeUnit.SECONDS)
+            .readTimeout(40, TimeUnit.SECONDS)
             .build()
     }
 
@@ -42,6 +42,12 @@ object CloudflareApi {
         val isPages: Boolean = false
     )
 
+    data class AccountStats(
+        val requests: Long,
+        val errors: Long,
+        val cpuTimeMs: Double
+    )
+
     data class WorkerMetrics(
         val totalRequests: Long,
         val totalErrors: Long,
@@ -49,6 +55,13 @@ object CloudflareApi {
         val requestPoints: List<Float>,
         val cpuPoints: List<Float>,
         val errorPoints: List<Float>
+    )
+
+    data class ScriptInfo(
+        val subdomain: String,
+        val logsEnabled: Boolean,
+        val tracesEnabled: Boolean,
+        val bindingCount: Int
     )
 
     private fun authGet(email: String, apiKey: String, url: String): Request {
@@ -61,14 +74,23 @@ object CloudflareApi {
             .build()
     }
 
-    private fun authPost(email: String, apiKey: String, url: String, body: String): Request {
+    private fun authPost(email: String, apiKey: String, url: String, jsonBody: String): Request {
         return Request.Builder()
             .url(url)
             .addHeader("X-Auth-Email", email)
             .addHeader("X-Auth-Key", apiKey)
             .addHeader("Content-Type", "application/json")
-            .post(body.toRequestBody("application/json".toMediaType()))
+            .post(jsonBody.toRequestBody("application/json".toMediaType()))
             .build()
+    }
+
+    private fun utcNowMinusHours(hours: Int): Pair<String, String> {
+        val sdf = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
+            timeZone = TimeZone.getTimeZone("UTC")
+        }
+        val end = Date()
+        val start = Date(end.time - hours * 60L * 60L * 1000L)
+        return sdf.format(start) to sdf.format(end)
     }
 
     suspend fun verifyGlobalKey(email: String, apiKey: String): ApiResult<Account> =
@@ -78,13 +100,7 @@ object CloudflareApi {
                 val resp = client.newCall(req).execute()
                 val body = resp.body?.string() ?: ""
                 if (!resp.isSuccessful) {
-                    return@withContext ApiResult(
-                        false,
-                        error = when (resp.code) {
-                            400, 401, 403 -> "邮箱或 Global API Key 错误 (${resp.code})"
-                            else -> "请求失败 (${resp.code})"
-                        }
-                    )
+                    return@withContext ApiResult(false, error = "邮箱或 Key 错误 (${resp.code})")
                 }
                 val json = JSONObject(body)
                 if (!json.optBoolean("success", false)) {
@@ -92,9 +108,7 @@ object CloudflareApi {
                     return@withContext ApiResult(false, error = msg)
                 }
                 val result = json.getJSONArray("result")
-                if (result.length() == 0) {
-                    return@withContext ApiResult(false, error = "没有找到 Account")
-                }
+                if (result.length() == 0) return@withContext ApiResult(false, error = "没有 Account")
                 val acc = result.getJSONObject(0)
                 ApiResult(true, Account(acc.getString("id"), acc.optString("name", "")))
             } catch (e: Exception) {
@@ -160,25 +174,14 @@ object CloudflareApi {
             }
         }
 
-    /**
-     * 用 GraphQL Analytics 拉取某个 Worker 最近 24 小时的真实指标
-     */
-    suspend fun getWorkerMetrics(
+    /** 账号级最近 24h 汇总（列表页顶部统计） */
+    suspend fun getAccountStats(
         email: String,
         apiKey: String,
-        accountId: String,
-        scriptName: String
-    ): ApiResult<WorkerMetrics> = withContext(Dispatchers.IO) {
+        accountId: String
+    ): ApiResult<AccountStats> = withContext(Dispatchers.IO) {
         try {
-            val sdf = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).apply {
-                timeZone = TimeZone.getTimeZone("UTC")
-            }
-            val end = Date()
-            val start = Date(end.time - 24 * 60 * 60 * 1000L)
-            val startStr = sdf.format(start)
-            val endStr = sdf.format(end)
-
-            // GraphQL 查询 Workers 调用自适应数据（按小时）
+            val (start, end) = utcNowMinusHours(24)
             val query = """
                 query {
                   viewer {
@@ -186,11 +189,91 @@ object CloudflareApi {
                       workersInvocationsAdaptive(
                         limit: 10000,
                         filter: {
-                          datetime_geq: "$startStr",
-                          datetime_leq: "$endStr",
-                          scriptName: "$scriptName"
-                        },
-                        orderBy: [datetimeHour_ASC]
+                          datetime_geq: "$start",
+                          datetime_leq: "$end"
+                        }
+                      ) {
+                        sum {
+                          requests
+                          errors
+                        }
+                        quantiles {
+                          cpuTimeP50
+                        }
+                      }
+                    }
+                  }
+                }
+            """.trimIndent()
+
+            val payload = JSONObject().put("query", query).toString()
+            val req = authPost(email, apiKey, GRAPHQL, payload)
+            val resp = client.newCall(req).execute()
+            val body = resp.body?.string() ?: ""
+
+            if (!resp.isSuccessful) {
+                return@withContext ApiResult(true, AccountStats(0, 0, 0.0))
+            }
+
+            val json = JSONObject(body)
+            if (json.has("errors")) {
+                return@withContext ApiResult(true, AccountStats(0, 0, 0.0))
+            }
+
+            val rows = json.optJSONObject("data")
+                ?.optJSONObject("viewer")
+                ?.optJSONArray("accounts")
+                ?.optJSONObject(0)
+                ?.optJSONArray("workersInvocationsAdaptive")
+                ?: JSONArray()
+
+            var requests = 0L
+            var errors = 0L
+            var cpuSum = 0.0
+            var cpuCount = 0
+
+            for (i in 0 until rows.length()) {
+                val row = rows.getJSONObject(i)
+                val sum = row.optJSONObject("sum")
+                val q = row.optJSONObject("quantiles")
+                requests += sum?.optLong("requests") ?: 0L
+                errors += sum?.optLong("errors") ?: 0L
+                val cpuUs = q?.optDouble("cpuTimeP50") ?: 0.0
+                if (cpuUs > 0) {
+                    cpuSum += cpuUs / 1000.0
+                    cpuCount++
+                }
+            }
+
+            val avgCpu = if (cpuCount > 0) cpuSum / cpuCount else 0.0
+            ApiResult(true, AccountStats(requests, errors, avgCpu))
+        } catch (e: Exception) {
+            ApiResult(true, AccountStats(0, 0, 0.0))
+        }
+    }
+
+    /** 单个 Worker 最近 24h 真实指标（官方 GraphQL） */
+    suspend fun getWorkerMetrics(
+        email: String,
+        apiKey: String,
+        accountId: String,
+        scriptName: String
+    ): ApiResult<WorkerMetrics> = withContext(Dispatchers.IO) {
+        try {
+            val (start, end) = utcNowMinusHours(24)
+
+            // 官方文档写法：dimensions.datetime + sum + quantiles
+            val query = """
+                query {
+                  viewer {
+                    accounts(filter: {accountTag: "$accountId"}) {
+                      workersInvocationsAdaptive(
+                        limit: 10000,
+                        filter: {
+                          scriptName: "$scriptName",
+                          datetime_geq: "$start",
+                          datetime_leq: "$end"
+                        }
                       ) {
                         sum {
                           requests
@@ -199,9 +282,12 @@ object CloudflareApi {
                         }
                         quantiles {
                           cpuTimeP50
+                          cpuTimeP99
                         }
                         dimensions {
-                          datetimeHour
+                          datetime
+                          scriptName
+                          status
                         }
                       }
                     }
@@ -209,74 +295,83 @@ object CloudflareApi {
                 }
             """.trimIndent()
 
-            val bodyJson = JSONObject().put("query", query).toString()
-            val req = authPost(email, apiKey, GRAPHQL, bodyJson)
+            val payload = JSONObject().put("query", query).toString()
+            val req = authPost(email, apiKey, GRAPHQL, payload)
             val resp = client.newCall(req).execute()
             val body = resp.body?.string() ?: ""
 
             if (!resp.isSuccessful) {
-                return@withContext ApiResult(false, error = "获取指标失败 (${resp.code})")
+                return@withContext ApiResult(false, error = "指标请求失败 (${resp.code})")
             }
 
             val json = JSONObject(body)
             if (json.has("errors")) {
-                val errMsg = json.optJSONArray("errors")?.optJSONObject(0)?.optString("message")
-                    ?: "GraphQL 错误"
-                // 某些账号没有 analytics 权限时会失败，返回空数据而不是硬失败
+                val msg = json.optJSONArray("errors")?.optJSONObject(0)?.optString("message") ?: "GraphQL error"
+                // 无权限或无数据时返回空，不打断 UI
                 return@withContext ApiResult(
                     true,
                     WorkerMetrics(0, 0, 0.0, emptyList(), emptyList(), emptyList())
                 )
             }
 
-            val accounts = json.optJSONObject("data")
+            val rows = json.optJSONObject("data")
                 ?.optJSONObject("viewer")
                 ?.optJSONArray("accounts")
-
-            if (accounts == null || accounts.length() == 0) {
-                return@withContext ApiResult(
-                    true,
-                    WorkerMetrics(0, 0, 0.0, emptyList(), emptyList(), emptyList())
-                )
-            }
-
-            val adaptive = accounts.getJSONObject(0).optJSONArray("workersInvocationsAdaptive")
+                ?.optJSONObject(0)
+                ?.optJSONArray("workersInvocationsAdaptive")
                 ?: JSONArray()
 
-            var totalRequests = 0L
-            var totalErrors = 0L
-            var totalCpu = 0.0
-            val requestPoints = mutableListOf<Float>()
-            val cpuPoints = mutableListOf<Float>()
-            val errorPoints = mutableListOf<Float>()
+            // 按小时聚合，方便画折线
+            val hourReq = linkedMapOf<String, Long>()
+            val hourErr = linkedMapOf<String, Long>()
+            val hourCpu = linkedMapOf<String, MutableList<Double>>()
 
-            for (i in 0 until adaptive.length()) {
-                val row = adaptive.getJSONObject(i)
+            var totalReq = 0L
+            var totalErr = 0L
+            var cpuSum = 0.0
+            var cpuCnt = 0
+
+            for (i in 0 until rows.length()) {
+                val row = rows.getJSONObject(i)
                 val sum = row.optJSONObject("sum")
-                val quantiles = row.optJSONObject("quantiles")
+                val q = row.optJSONObject("quantiles")
+                val dim = row.optJSONObject("dimensions")
 
                 val reqs = sum?.optLong("requests") ?: 0L
                 val errs = sum?.optLong("errors") ?: 0L
-                // cpuTimeP50 单位是微秒，转成毫秒
-                val cpuUs = quantiles?.optDouble("cpuTimeP50") ?: 0.0
+                val cpuUs = q?.optDouble("cpuTimeP50") ?: 0.0
                 val cpuMs = cpuUs / 1000.0
 
-                totalRequests += reqs
-                totalErrors += errs
-                totalCpu += cpuMs
+                totalReq += reqs
+                totalErr += errs
+                if (cpuMs > 0) {
+                    cpuSum += cpuMs
+                    cpuCnt++
+                }
 
-                requestPoints.add(reqs.toFloat())
-                cpuPoints.add(cpuMs.toFloat())
-                errorPoints.add(errs.toFloat())
+                val dt = dim?.optString("datetime") ?: continue
+                val hourKey = if (dt.length >= 13) dt.take(13) + ":00:00Z" else dt
+
+                hourReq[hourKey] = (hourReq[hourKey] ?: 0L) + reqs
+                hourErr[hourKey] = (hourErr[hourKey] ?: 0L) + errs
+                hourCpu.getOrPut(hourKey) { mutableListOf() }.add(cpuMs)
             }
 
-            val avgCpu = if (adaptive.length() > 0) totalCpu / adaptive.length() else 0.0
+            val sortedHours = hourReq.keys.sorted()
+            val requestPoints = sortedHours.map { (hourReq[it] ?: 0L).toFloat() }
+            val errorPoints = sortedHours.map { (hourErr[it] ?: 0L).toFloat() }
+            val cpuPoints = sortedHours.map { h ->
+                val list = hourCpu[h]
+                if (list.isNullOrEmpty()) 0f else (list.average()).toFloat()
+            }
+
+            val avgCpu = if (cpuCnt > 0) cpuSum / cpuCnt else 0.0
 
             ApiResult(
                 true,
                 WorkerMetrics(
-                    totalRequests = totalRequests,
-                    totalErrors = totalErrors,
+                    totalRequests = totalReq,
+                    totalErrors = totalErr,
                     cpuTimeMs = avgCpu,
                     requestPoints = requestPoints,
                     cpuPoints = cpuPoints,
@@ -285,6 +380,69 @@ object CloudflareApi {
             )
         } catch (e: Exception) {
             ApiResult(false, error = e.message ?: "网络错误")
+        }
+    }
+
+    /** 脚本设置：Observability / 子域名 */
+    suspend fun getScriptInfo(
+        email: String,
+        apiKey: String,
+        accountId: String,
+        scriptName: String
+    ): ApiResult<ScriptInfo> = withContext(Dispatchers.IO) {
+        try {
+            // settings（含 observability）
+            var logsEnabled = false
+            var tracesEnabled = false
+            var bindingCount = 0
+
+            val settingsReq = authGet(
+                email, apiKey,
+                "$BASE/accounts/$accountId/workers/scripts/$scriptName/script-settings"
+            )
+            val settingsResp = client.newCall(settingsReq).execute()
+            val settingsBody = settingsResp.body?.string() ?: ""
+            if (settingsResp.isSuccessful) {
+                val json = JSONObject(settingsBody)
+                if (json.optBoolean("success", false)) {
+                    val result = json.optJSONObject("result")
+                    val obs = result?.optJSONObject("observability")
+                    logsEnabled = obs?.optBoolean("enabled", false) == true ||
+                            obs?.optJSONObject("logs")?.optBoolean("enabled", false) == true
+                    // traces 字段因版本可能不同，尽量兼容
+                    tracesEnabled = obs?.optJSONObject("traces")?.optBoolean("enabled", false) == true
+                }
+            }
+
+            // bindings 数量
+            val bindReq = authGet(
+                email, apiKey,
+                "$BASE/accounts/$accountId/workers/scripts/$scriptName/settings"
+            )
+            val bindResp = client.newCall(bindReq).execute()
+            val bindBody = bindResp.body?.string() ?: ""
+            if (bindResp.isSuccessful) {
+                val json = JSONObject(bindBody)
+                if (json.optBoolean("success", false)) {
+                    val bindings = json.optJSONObject("result")?.optJSONArray("bindings")
+                    bindingCount = bindings?.length() ?: 0
+                }
+            }
+
+            ApiResult(
+                true,
+                ScriptInfo(
+                    subdomain = "$scriptName.workers.dev",
+                    logsEnabled = logsEnabled,
+                    tracesEnabled = tracesEnabled,
+                    bindingCount = bindingCount
+                )
+            )
+        } catch (e: Exception) {
+            ApiResult(
+                true,
+                ScriptInfo("$scriptName.workers.dev", false, false, 0)
+            )
         }
     }
 
@@ -297,7 +455,10 @@ object CloudflareApi {
     }
 
     fun formatCpu(ms: Double): String {
-        return if (ms < 1) String.format(Locale.US, "%.2f ms", ms)
-        else String.format(Locale.US, "%.0f ms", ms)
+        return when {
+            ms <= 0 -> "0 ms"
+            ms < 1 -> String.format(Locale.US, "%.2f ms", ms)
+            else -> String.format(Locale.US, "%.1f ms", ms)
+        }
     }
 }
