@@ -35,6 +35,7 @@ fun HomeScreen(
     val apps by viewModel.apps.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val stats by viewModel.accountStats.collectAsState()
+    val statsError by viewModel.accountStatsError.collectAsState()
     var searchQuery by remember { mutableStateOf("") }
 
     val filtered = if (searchQuery.isBlank()) apps
@@ -79,12 +80,24 @@ fun HomeScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 item { BillingCard() }
+
                 item {
                     PeriodStats(
                         requests = stats?.let { CloudflareApi.formatCount(it.requests) } ?: "—",
                         cpu = stats?.let { CloudflareApi.formatCpu(it.cpuTimeMs) } ?: "—",
-                        errors = stats?.errors?.toString() ?: "—"
+                        errors = stats?.errors?.toString() ?: "—",
+                        workersCount = apps.count { !it.isPages }.toString()
                     )
+                }
+
+                if (statsError != null) {
+                    item {
+                        Text(
+                            "统计提示: $statsError",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
                 }
 
                 item {
@@ -149,7 +162,11 @@ private fun BillingCard() {
                 Spacer(Modifier.width(12.dp))
                 Column {
                     Text("按量计费（当前周期）", fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                    Text("目前尚未产生可计费的使用量", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        "账单需 Billing API，当前未接入",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
         }
@@ -157,7 +174,7 @@ private fun BillingCard() {
 }
 
 @Composable
-private fun PeriodStats(requests: String, cpu: String, errors: String) {
+private fun PeriodStats(requests: String, cpu: String, errors: String, workersCount: String) {
     Column {
         Text("最近 24 小时", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 8.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -167,7 +184,7 @@ private fun PeriodStats(requests: String, cpu: String, errors: String) {
         Spacer(Modifier.height(8.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             StatCard("错误", errors, Modifier.weight(1f))
-            StatCard("Workers 数量", "—", Modifier.weight(1f))
+            StatCard("Workers 数量", workersCount, Modifier.weight(1f))
         }
     }
 }

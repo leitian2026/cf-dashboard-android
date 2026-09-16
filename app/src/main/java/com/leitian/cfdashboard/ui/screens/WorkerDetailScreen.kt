@@ -38,6 +38,7 @@ fun WorkerDetailScreen(
     val metrics by viewModel.metrics.collectAsState()
     val scriptInfo by viewModel.scriptInfo.collectAsState()
     val metricsLoading by viewModel.metricsLoading.collectAsState()
+    val metricsError by viewModel.metricsError.collectAsState()
 
     LaunchedEffect(appName) {
         viewModel.loadDetail(appName)
@@ -66,7 +67,10 @@ fun WorkerDetailScreen(
         }
     ) { padding ->
         Column(
-            Modifier.fillMaxSize().padding(padding).background(MaterialTheme.colorScheme.background)
+            Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .background(MaterialTheme.colorScheme.background)
         ) {
             ScrollableTabRow(
                 selectedTabIndex = selectedTab,
@@ -89,111 +93,246 @@ fun WorkerDetailScreen(
                 }
             }
 
-            Column(
-                Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                val domain = scriptInfo?.subdomain ?: "$appName.workers.dev"
-
-                Card(
-                    Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-                ) {
-                    Row(
-                        Modifier.fillMaxWidth().padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("🌐", fontSize = 18.sp)
-                        Spacer(Modifier.width(8.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                domain,
-                                fontWeight = FontWeight.Medium,
-                                fontSize = 14.sp,
-                                color = MaterialTheme.colorScheme.secondary
-                            )
-                            Text(
-                                "Automatic deployment on upload.",
-                                fontSize = 12.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                }
-
-                BindingDiagram(
+            // 根据选中的 Tab 显示不同内容（之前的问题：只有概述内容，点其他 Tab 没切换）
+            when (selectedTab) {
+                0 -> OverviewTab(
                     appName = appName,
-                    bindingCount = scriptInfo?.bindingCount ?: 0,
-                    logsEnabled = scriptInfo?.logsEnabled ?: false,
-                    tracesEnabled = scriptInfo?.tracesEnabled ?: false
+                    scriptInfo = scriptInfo,
+                    metrics = metrics,
+                    metricsLoading = metricsLoading,
+                    metricsError = metricsError
                 )
-
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("指标", fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
-                        Spacer(Modifier.width(8.dp))
-                        Surface(shape = RoundedCornerShape(4.dp), color = Color(0xFFF0F0F0)) {
-                            Text(
-                                "最后一个 24 小时",
-                                fontSize = 11.sp,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                            )
-                        }
-                    }
-                    if (metricsLoading) {
-                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                    }
-                }
-
-                val m = metrics
-                val reqValue = when {
-                    metricsLoading && m == null -> "..."
-                    m != null -> CloudflareApi.formatCount(m.totalRequests)
-                    else -> "0"
-                }
-                val cpuValue = when {
-                    metricsLoading && m == null -> "..."
-                    m != null -> CloudflareApi.formatCpu(m.cpuTimeMs)
-                    else -> "0 ms"
-                }
-                val errValue = when {
-                    metricsLoading && m == null -> "..."
-                    m != null -> m.totalErrors.toString()
-                    else -> "0"
-                }
-
-                MetricCard("调用次数", reqValue, m?.requestPoints ?: emptyList(), Color(0xFF3B82F6))
-                MetricCard("CPU 时间", cpuValue, m?.cpuPoints ?: emptyList(), Color(0xFF3B82F6))
-
-                Card(
-                    Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-                ) {
-                    Column(Modifier.padding(16.dp)) {
-                        Text("错误", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Spacer(Modifier.height(4.dp))
-                        Text(errValue, fontWeight = FontWeight.Bold, fontSize = 28.sp)
-                        Spacer(Modifier.height(12.dp))
-                        if (m != null && m.errorPoints.isNotEmpty()) {
-                            SimpleLineChart(m.errorPoints, Color(0xFFEF4444), Modifier.fillMaxWidth().height(40.dp))
-                        } else {
-                            Box(
-                                Modifier.fillMaxWidth().height(40.dp)
-                                    .background(Color(0xFFFAFAFA), RoundedCornerShape(4.dp))
-                            )
-                        }
-                    }
-                }
-
-                Spacer(Modifier.height(24.dp))
+                1 -> MetricsTab(
+                    metrics = metrics,
+                    metricsLoading = metricsLoading,
+                    metricsError = metricsError
+                )
+                2 -> PlaceholderTab("部署", "此处显示该 Worker 的部署历史与版本信息。\n（需对接 deployments API）")
+                3 -> BindingsTab(scriptInfo = scriptInfo)
+                4 -> ObservabilityTab(scriptInfo = scriptInfo)
+                5 -> PlaceholderTab("域", "此处显示绑定到该 Worker 的自定义域名与路由。\n（需对接 routes / domains API）")
+                6 -> PlaceholderTab("Access", "Cloudflare Access 相关配置。")
+                7 -> PlaceholderTab("设置", "Worker 基础设置、兼容性日期、用量模型等。")
             }
         }
+    }
+}
+
+@Composable
+private fun OverviewTab(
+    appName: String,
+    scriptInfo: CloudflareApi.ScriptInfo?,
+    metrics: CloudflareApi.WorkerMetrics?,
+    metricsLoading: Boolean,
+    metricsError: String?
+) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        val domain = scriptInfo?.subdomain ?: "$appName.workers.dev"
+
+        Card(
+            Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        ) {
+            Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("🌐", fontSize = 18.sp)
+                Spacer(Modifier.width(8.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(domain, fontWeight = FontWeight.Medium, fontSize = 14.sp, color = MaterialTheme.colorScheme.secondary)
+                    Text("Automatic deployment on upload.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+
+        BindingDiagram(
+            appName = appName,
+            bindingCount = scriptInfo?.bindingCount ?: 0,
+            logsEnabled = scriptInfo?.logsEnabled ?: false,
+            tracesEnabled = scriptInfo?.tracesEnabled ?: false
+        )
+
+        // 概述里也放一份最近 24h 指标摘要
+        MetricsSummary(metrics, metricsLoading, metricsError)
+
+        Spacer(Modifier.height(24.dp))
+    }
+}
+
+@Composable
+private fun MetricsTab(
+    metrics: CloudflareApi.WorkerMetrics?,
+    metricsLoading: Boolean,
+    metricsError: String?
+) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("指标", fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+            Spacer(Modifier.width(8.dp))
+            Surface(shape = RoundedCornerShape(4.dp), color = Color(0xFFF0F0F0)) {
+                Text("最后一个 24 小时", fontSize = 11.sp, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
+            }
+            Spacer(Modifier.weight(1f))
+            if (metricsLoading) {
+                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+            }
+        }
+
+        if (metricsError != null) {
+            Text(metricsError, color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
+        }
+
+        MetricsSummary(metrics, metricsLoading, metricsError)
+        Spacer(Modifier.height(24.dp))
+    }
+}
+
+@Composable
+private fun MetricsSummary(
+    metrics: CloudflareApi.WorkerMetrics?,
+    metricsLoading: Boolean,
+    metricsError: String?
+) {
+    val m = metrics
+    val reqValue = when {
+        metricsLoading && m == null -> "..."
+        m != null -> CloudflareApi.formatCount(m.totalRequests)
+        else -> "0"
+    }
+    val cpuValue = when {
+        metricsLoading && m == null -> "..."
+        m != null -> CloudflareApi.formatCpu(m.cpuTimeMs)
+        else -> "0 ms"
+    }
+    val errValue = when {
+        metricsLoading && m == null -> "..."
+        m != null -> m.totalErrors.toString()
+        else -> "0"
+    }
+
+    MetricCard("调用次数", reqValue, m?.requestPoints ?: emptyList(), Color(0xFF3B82F6))
+    MetricCard("CPU 时间", cpuValue, m?.cpuPoints ?: emptyList(), Color(0xFF3B82F6))
+
+    Card(
+        Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Text("错误", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(4.dp))
+            Text(errValue, fontWeight = FontWeight.Bold, fontSize = 28.sp)
+            Spacer(Modifier.height(12.dp))
+            if (m != null && m.errorPoints.isNotEmpty()) {
+                SimpleLineChart(m.errorPoints, Color(0xFFEF4444), Modifier.fillMaxWidth().height(40.dp))
+            } else {
+                Box(
+                    Modifier.fillMaxWidth().height(40.dp)
+                        .background(Color(0xFFFAFAFA), RoundedCornerShape(4.dp))
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun BindingsTab(scriptInfo: CloudflareApi.ScriptInfo?) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text("绑定", fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+        Card(
+            Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        ) {
+            Column(Modifier.padding(16.dp)) {
+                Text("Bindings 数量", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "${scriptInfo?.bindingCount ?: 0}",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 24.sp
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "从 /workers/scripts/{name}/settings 读取的真实绑定数量。",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ObservabilityTab(scriptInfo: CloudflareApi.ScriptInfo?) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text("Observability", fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+        Card(
+            Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        ) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Workers Logs")
+                    StatusChip(
+                        if (scriptInfo?.logsEnabled == true) "已启用" else "已禁用",
+                        scriptInfo?.logsEnabled == true
+                    )
+                }
+                HorizontalDivider()
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Workers Traces")
+                    StatusChip(
+                        if (scriptInfo?.tracesEnabled == true) "已启用" else "已禁用",
+                        scriptInfo?.tracesEnabled == true
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlaceholderTab(title: String, desc: String) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(title, fontWeight = FontWeight.SemiBold, fontSize = 18.sp)
+        Spacer(Modifier.height(12.dp))
+        Text(
+            desc,
+            fontSize = 14.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            lineHeight = 20.sp
+        )
     }
 }
 
@@ -216,12 +355,7 @@ private fun BindingDiagram(
                     BindingChip("Workers  —")
                     BindingChip("Queues  —")
                 }
-                Text(
-                    "→",
-                    fontSize = 20.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 8.dp)
-                )
+                Text("→", fontSize = 20.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 8.dp))
                 Card(
                     Modifier.weight(1.2f),
                     shape = RoundedCornerShape(10.dp),

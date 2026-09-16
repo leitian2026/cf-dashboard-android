@@ -27,6 +27,9 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
     private val _accountStats = MutableStateFlow<CloudflareApi.AccountStats?>(null)
     val accountStats: StateFlow<CloudflareApi.AccountStats?> = _accountStats.asStateFlow()
 
+    private val _accountStatsError = MutableStateFlow<String?>(null)
+    val accountStatsError: StateFlow<String?> = _accountStatsError.asStateFlow()
+
     private val _metrics = MutableStateFlow<CloudflareApi.WorkerMetrics?>(null)
     val metrics: StateFlow<CloudflareApi.WorkerMetrics?> = _metrics.asStateFlow()
 
@@ -35,6 +38,9 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
 
     private val _metricsLoading = MutableStateFlow(false)
     val metricsLoading: StateFlow<Boolean> = _metricsLoading.asStateFlow()
+
+    private val _metricsError = MutableStateFlow<String?>(null)
+    val metricsError: StateFlow<String?> = _metricsError.asStateFlow()
 
     private var email: String? = null
     private var apiKey: String? = null
@@ -99,9 +105,16 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
         val k = apiKey ?: return
         val a = accountId ?: return
         viewModelScope.launch {
+            _accountStatsError.value = null
             val result = CloudflareApi.getAccountStats(e, k, a)
             if (result.success) {
                 _accountStats.value = result.data
+                if (result.data != null && result.data.requests == 0L) {
+                    // 0 可能是真没流量，也可能是 GraphQL 权限/查询问题
+                    _accountStatsError.value = result.error
+                }
+            } else {
+                _accountStatsError.value = result.error ?: "账号统计拉取失败"
             }
         }
     }
@@ -114,10 +127,19 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
             _metricsLoading.value = true
             _metrics.value = null
             _scriptInfo.value = null
+            _metricsError.value = null
 
             val metricsResult = CloudflareApi.getWorkerMetrics(e, k, a, scriptName)
             if (metricsResult.success) {
                 _metrics.value = metricsResult.data
+                if (metricsResult.data != null &&
+                    metricsResult.data.totalRequests == 0L &&
+                    metricsResult.error != null
+                ) {
+                    _metricsError.value = metricsResult.error
+                }
+            } else {
+                _metricsError.value = metricsResult.error ?: "指标拉取失败"
             }
 
             val infoResult = CloudflareApi.getScriptInfo(e, k, a, scriptName)
@@ -132,6 +154,7 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
     fun clearDetail() {
         _metrics.value = null
         _scriptInfo.value = null
+        _metricsError.value = null
     }
 
     fun logout() {
