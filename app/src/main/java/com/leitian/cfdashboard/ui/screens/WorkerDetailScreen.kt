@@ -7,6 +7,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.MoreVert
@@ -18,6 +21,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -29,6 +33,7 @@ import com.leitian.cfdashboard.ui.viewmodel.MainViewModel
 fun WorkerDetailScreen(
     appId: String,
     appName: String,
+    isPages: Boolean = false,
     viewModel: MainViewModel,
     onBack: () -> Unit
 ) {
@@ -49,9 +54,49 @@ fun WorkerDetailScreen(
     val accessError by viewModel.accessError.collectAsState()
     val settingsDetail by viewModel.settingsDetail.collectAsState()
     val settingsError by viewModel.settingsError.collectAsState()
+    val uploadState by viewModel.uploadState.collectAsState()
+
+    var menuExpanded by remember { mutableStateOf(false) }
+    var showPagesUnsupported by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+
+    val filePicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        uri?.let { viewModel.uploadScript(appName, it, context) }
+    }
 
     LaunchedEffect(appName) { viewModel.loadDetail(appName) }
     DisposableEffect(Unit) { onDispose { viewModel.clearDetail() } }
+
+    // 上传结果提示
+    if (uploadState is MainViewModel.UploadState.Success || uploadState is MainViewModel.UploadState.Error) {
+        val isSuccess = uploadState is MainViewModel.UploadState.Success
+        val message = when (val s = uploadState) {
+            is MainViewModel.UploadState.Success -> s.message
+            is MainViewModel.UploadState.Error -> s.message
+            else -> ""
+        }
+        AlertDialog(
+            onDismissRequest = { viewModel.clearUploadState() },
+            title = { Text(if (isSuccess) "部署成功" else "部署失败") },
+            text = { Text(message) },
+            confirmButton = {
+                TextButton(onClick = { viewModel.clearUploadState() }) { Text("确定") }
+            }
+        )
+    }
+
+    if (showPagesUnsupported) {
+        AlertDialog(
+            onDismissRequest = { showPagesUnsupported = false },
+            title = { Text("暂不支持") },
+            text = { Text("Pages 项目部署流程较复杂，当前版本仅支持 Workers 单文件脚本上传。") },
+            confirmButton = {
+                TextButton(onClick = { showPagesUnsupported = false }) { Text("知道了") }
+            }
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -63,7 +108,38 @@ fun WorkerDetailScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = {}) { Icon(Icons.Default.MoreVert, "更多") }
+                    Box {
+                        IconButton(onClick = { menuExpanded = true }) {
+                            Icon(Icons.Default.MoreVert, "更多")
+                        }
+                        DropdownMenu(
+                            expanded = menuExpanded,
+                            onDismissRequest = { menuExpanded = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("上传文件部署") },
+                                onClick = {
+                                    menuExpanded = false
+                                    if (isPages) {
+                                        showPagesUnsupported = true
+                                    } else {
+                                        filePicker.launch(arrayOf(
+                                            "application/javascript",
+                                            "text/javascript",
+                                            "text/plain",
+                                            "*/*"
+                                        ))
+                                    }
+                                }
+                            )
+                        }
+                    }
+                    if (uploadState is MainViewModel.UploadState.Loading) {
+                        CircularProgressIndicator(
+                            Modifier.size(20.dp).padding(end = 12.dp),
+                            strokeWidth = 2.dp
+                        )
+                    }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
             )
@@ -425,62 +501,33 @@ private fun ObservabilityTab(scriptInfo: CloudflareApi.ScriptInfo?) {
             shape = RoundedCornerShape(12.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
         ) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("Workers Logs")
-                    StatusChip(if (scriptInfo?.logsEnabled == true) "已启用" else "已禁用", scriptInfo?.logsEnabled == true)
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Workers Logs", Modifier.weight(1f), fontSize = 14.sp)
+                    Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        color = if (scriptInfo?.logsEnabled == true) Color(0xFFE6F4EA) else Color(0xFFF5F5F5)
+                    ) {
+                        Text(
+                            if (scriptInfo?.logsEnabled == true) "已启用" else "已禁用",
+                            fontSize = 12.sp,
+                            color = if (scriptInfo?.logsEnabled == true) Color(0xFF137333) else Color.Gray,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                        )
+                    }
                 }
-                HorizontalDivider()
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("Workers Traces")
-                    StatusChip(if (scriptInfo?.tracesEnabled == true) "已启用" else "已禁用", scriptInfo?.tracesEnabled == true)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun BindingDiagram(appName: String, bindingCount: Int, logsEnabled: Boolean, tracesEnabled: Boolean) {
-    Card(
-        Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-    ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    BindingChip("绑定  $bindingCount")
-                    BindingChip("Workers  —")
-                    BindingChip("Queues  —")
-                }
-                Text("→", fontSize = 20.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 8.dp))
-                Card(
-                    Modifier.weight(1.2f),
-                    shape = RoundedCornerShape(10.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFFF8F9FA)),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE0E0E0))
-                ) {
-                    Column(Modifier.padding(12.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("◇  $appName", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                            Spacer(Modifier.weight(1f))
-                            Box(Modifier.size(8.dp).clip(CircleShape).background(Color(0xFF3B82F6)))
-                        }
-                        Spacer(Modifier.height(8.dp))
-                        Text("Observability", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Spacer(Modifier.height(4.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("Workers Logs", fontSize = 12.sp)
-                            Spacer(Modifier.weight(1f))
-                            StatusChip(if (logsEnabled) "已启用" else "已禁用", logsEnabled)
-                        }
-                        Spacer(Modifier.height(2.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("Workers Traces", fontSize = 12.sp)
-                            Spacer(Modifier.weight(1f))
-                            StatusChip(if (tracesEnabled) "已启用" else "已禁用", tracesEnabled)
-                        }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Workers Traces", Modifier.weight(1f), fontSize = 14.sp)
+                    Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        color = if (scriptInfo?.tracesEnabled == true) Color(0xFFE6F4EA) else Color(0xFFF5F5F5)
+                    ) {
+                        Text(
+                            if (scriptInfo?.tracesEnabled == true) "已启用" else "已禁用",
+                            fontSize = 12.sp,
+                            color = if (scriptInfo?.tracesEnabled == true) Color(0xFF137333) else Color.Gray,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                        )
                     }
                 }
             }
@@ -489,22 +536,81 @@ private fun BindingDiagram(appName: String, bindingCount: Int, logsEnabled: Bool
 }
 
 @Composable
-private fun BindingChip(text: String) {
-    Surface(
-        shape = RoundedCornerShape(8.dp),
-        color = MaterialTheme.colorScheme.surface,
-        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE0E0E0))
+private fun BindingDiagram(
+    appName: String,
+    bindingCount: Int,
+    logsEnabled: Boolean,
+    tracesEnabled: Boolean
+) {
+    Card(
+        Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
-        Text(text, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp))
-    }
-}
-
-@Composable
-private fun StatusChip(text: String, enabled: Boolean) {
-    val bg = if (enabled) Color(0xFFE6F4EA) else Color(0xFFF5F5F5)
-    val fg = if (enabled) Color(0xFF137333) else Color(0xFF666666)
-    Surface(shape = RoundedCornerShape(12.dp), color = bg) {
-        Text(text, fontSize = 11.sp, color = fg, modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp))
+        Row(
+            Modifier.fillMaxWidth().padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Surface(shape = RoundedCornerShape(8.dp), color = Color(0xFFF5F5F5)) {
+                    Text("绑定 $bindingCount", Modifier.padding(horizontal = 10.dp, vertical = 6.dp), fontSize = 12.sp)
+                }
+                Surface(shape = RoundedCornerShape(8.dp), color = Color(0xFFF5F5F5)) {
+                    Text("Workers —", Modifier.padding(horizontal = 10.dp, vertical = 6.dp), fontSize = 12.sp)
+                }
+                Surface(shape = RoundedCornerShape(8.dp), color = Color(0xFFF5F5F5)) {
+                    Text("Queues —", Modifier.padding(horizontal = 10.dp, vertical = 6.dp), fontSize = 12.sp)
+                }
+            }
+            Spacer(Modifier.width(12.dp))
+            Text("→", fontSize = 18.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.width(12.dp))
+            Card(
+                shape = RoundedCornerShape(10.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFFF8F9FA)),
+                modifier = Modifier.weight(1f)
+            ) {
+                Column(Modifier.padding(12.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("◇ $appName", fontWeight = FontWeight.Medium, fontSize = 13.sp)
+                        Spacer(Modifier.weight(1f))
+                        Box(Modifier.size(8.dp).clip(CircleShape).background(Color(0xFF3B82F6)))
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text("Observability", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(4.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Workers Logs", fontSize = 12.sp, Modifier.weight(1f))
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = if (logsEnabled) Color(0xFFE6F4EA) else Color(0xFFF0F0F0)
+                        ) {
+                            Text(
+                                if (logsEnabled) "已启用" else "已禁用",
+                                fontSize = 11.sp,
+                                color = if (logsEnabled) Color(0xFF137333) else Color.Gray,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(2.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Workers Traces", fontSize = 12.sp, Modifier.weight(1f))
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = if (tracesEnabled) Color(0xFFE6F4EA) else Color(0xFFF0F0F0)
+                        ) {
+                            Text(
+                                if (tracesEnabled) "已启用" else "已禁用",
+                                fontSize = 11.sp,
+                                color = if (tracesEnabled) Color(0xFF137333) else Color.Gray,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
