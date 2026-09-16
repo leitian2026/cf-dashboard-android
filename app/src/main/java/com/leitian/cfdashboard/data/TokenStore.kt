@@ -14,16 +14,17 @@ private val Context.dataStore: DataStore<Preferences> by preferencesDataStore("c
 
 class TokenStore(private val context: Context) {
 
-    private val TOKEN = stringPreferencesKey("api_token")
+    private val EMAIL = stringPreferencesKey("email")
+    private val API_KEY = stringPreferencesKey("api_key")
     private val ACCOUNT_ID = stringPreferencesKey("account_id")
     private val ACCOUNT_NAME = stringPreferencesKey("account_name")
 
-    val tokenFlow: Flow<String?> = context.dataStore.data.map { it[TOKEN] }
-    val accountIdFlow: Flow<String?> = context.dataStore.data.map { it[ACCOUNT_ID] }
+    val emailFlow: Flow<String?> = context.dataStore.data.map { it[EMAIL] }
 
-    suspend fun save(token: String, accountId: String, accountName: String) {
+    suspend fun save(email: String, apiKey: String, accountId: String, accountName: String) {
         context.dataStore.edit {
-            it[TOKEN] = token
+            it[EMAIL] = email
+            it[API_KEY] = apiKey
             it[ACCOUNT_ID] = accountId
             it[ACCOUNT_NAME] = accountName
         }
@@ -33,8 +34,8 @@ class TokenStore(private val context: Context) {
         context.dataStore.edit { it.clear() }
     }
 
-    suspend fun getTokenAndAccount(): Pair<String?, String?> {
+    suspend fun getCredentials(): Triple<String?, String?, String?> {
         val prefs = context.dataStore.data.first()
-        return prefs[TOKEN] to prefs[ACCOUNT_ID]
+        return Triple(prefs[EMAIL], prefs[API_KEY], prefs[ACCOUNT_ID])
     }
 }

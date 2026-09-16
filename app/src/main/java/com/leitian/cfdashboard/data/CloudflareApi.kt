@@ -34,44 +34,55 @@ object CloudflareApi {
         val isPages: Boolean = false
     )
 
-    private fun authRequest(token: String, url: String): Request {
+    /** Global API Key 方式：邮箱 + Key */
+    private fun authRequest(email: String, apiKey: String, url: String): Request {
         return Request.Builder()
             .url(url)
-            .addHeader("Authorization", "Bearer $token")
+            .addHeader("X-Auth-Email", email)
+            .addHeader("X-Auth-Key", apiKey)
             .addHeader("Content-Type", "application/json")
             .get()
             .build()
     }
 
-    suspend fun verifyToken(token: String): ApiResult<Account> = withContext(Dispatchers.IO) {
-        try {
-            val req = authRequest(token, "$BASE/accounts?per_page=1")
-            val resp = client.newCall(req).execute()
-            val body = resp.body?.string() ?: ""
-            if (!resp.isSuccessful) {
-                return@withContext ApiResult(false, error = "Token 无效或无权限 (${resp.code})")
+    suspend fun verifyGlobalKey(email: String, apiKey: String): ApiResult<Account> =
+        withContext(Dispatchers.IO) {
+            try {
+                val req = authRequest(email, apiKey, "$BASE/accounts?per_page=1")
+                val resp = client.newCall(req).execute()
+                val body = resp.body?.string() ?: ""
+                if (!resp.isSuccessful) {
+                    return@withContext ApiResult(
+                        false,
+                        error = when (resp.code) {
+                            400, 401, 403 -> "邮箱或 Global API Key 错误 (${resp.code})"
+                            else -> "请求失败 (${resp.code})"
+                        }
+                    )
+                }
+                val json = JSONObject(body)
+                if (!json.optBoolean("success", false)) {
+                    val msg = json.optJSONArray("errors")?.optJSONObject(0)?.optString("message") ?: "验证失败"
+                    return@withContext ApiResult(false, error = msg)
+                }
+                val result = json.getJSONArray("result")
+                if (result.length() == 0) {
+                    return@withContext ApiResult(false, error = "没有找到 Account")
+                }
+                val acc = result.getJSONObject(0)
+                ApiResult(true, Account(acc.getString("id"), acc.optString("name", "")))
+            } catch (e: Exception) {
+                ApiResult(false, error = e.message ?: "网络错误")
             }
-            val json = JSONObject(body)
-            if (!json.optBoolean("success", false)) {
-                val msg = json.optJSONArray("errors")?.optJSONObject(0)?.optString("message") ?: "验证失败"
-                return@withContext ApiResult(false, error = msg)
-            }
-            val result = json.getJSONArray("result")
-            if (result.length() == 0) return@withContext ApiResult(false, error = "没有找到 Account")
-            val acc = result.getJSONObject(0)
-            ApiResult(true, Account(acc.getString("id"), acc.optString("name", "")))
-        } catch (e: Exception) {
-            ApiResult(false, error = e.message ?: "网络错误")
         }
-    }
 
-    suspend fun getApps(token: String, accountId: String): ApiResult<List<AppItem>> =
+    suspend fun getApps(email: String, apiKey: String, accountId: String): ApiResult<List<AppItem>> =
         withContext(Dispatchers.IO) {
             try {
                 val items = mutableListOf<AppItem>()
 
                 // Workers
-                val wReq = authRequest(token, "$BASE/accounts/$accountId/workers/scripts")
+                val wReq = authRequest(email, apiKey, "$BASE/accounts/$accountId/workers/scripts")
                 val wResp = client.newCall(wReq).execute()
                 val wBody = wResp.body?.string() ?: ""
                 if (wResp.isSuccessful) {
@@ -95,7 +106,7 @@ object CloudflareApi {
                 }
 
                 // Pages
-                val pReq = authRequest(token, "$BASE/accounts/$accountId/pages/projects")
+                val pReq = authRequest(email, apiKey, "$BASE/accounts/$accountId/pages/projects")
                 val pResp = client.newCall(pReq).execute()
                 val pBody = pResp.body?.string() ?: ""
                 if (pResp.isSuccessful) {

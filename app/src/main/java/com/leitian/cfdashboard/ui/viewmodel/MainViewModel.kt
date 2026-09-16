@@ -24,14 +24,16 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
     private val _apps = MutableStateFlow<List<CloudflareApi.AppItem>>(emptyList())
     val apps: StateFlow<List<CloudflareApi.AppItem>> = _apps.asStateFlow()
 
-    private var token: String? = null
+    private var email: String? = null
+    private var apiKey: String? = null
     private var accountId: String? = null
 
     init {
         viewModelScope.launch {
-            val (t, a) = tokenStore.getTokenAndAccount()
-            if (!t.isNullOrBlank() && !a.isNullOrBlank()) {
-                token = t
+            val (e, k, a) = tokenStore.getCredentials()
+            if (!e.isNullOrBlank() && !k.isNullOrBlank() && !a.isNullOrBlank()) {
+                email = e
+                apiKey = k
                 accountId = a
                 _isLoggedIn.value = true
                 loadApps()
@@ -39,19 +41,22 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
         }
     }
 
-    fun login(apiToken: String) {
-        if (apiToken.isBlank()) {
-            _loginError.value = "请输入 API Token"
+    fun login(emailInput: String, keyInput: String) {
+        val e = emailInput.trim()
+        val k = keyInput.trim()
+        if (e.isBlank() || k.isBlank()) {
+            _loginError.value = "请输入邮箱和 Global API Key"
             return
         }
         viewModelScope.launch {
             _isLoading.value = true
             _loginError.value = null
-            val result = CloudflareApi.verifyToken(apiToken.trim())
+            val result = CloudflareApi.verifyGlobalKey(e, k)
             if (result.success && result.data != null) {
-                token = apiToken.trim()
+                email = e
+                apiKey = k
                 accountId = result.data.id
-                tokenStore.save(apiToken.trim(), result.data.id, result.data.name)
+                tokenStore.save(e, k, result.data.id, result.data.name)
                 _isLoggedIn.value = true
                 loadApps()
             } else {
@@ -62,11 +67,12 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
     }
 
     fun loadApps() {
-        val t = token ?: return
+        val e = email ?: return
+        val k = apiKey ?: return
         val a = accountId ?: return
         viewModelScope.launch {
             _isLoading.value = true
-            val result = CloudflareApi.getApps(t, a)
+            val result = CloudflareApi.getApps(e, k, a)
             if (result.success) {
                 _apps.value = result.data ?: emptyList()
             }
@@ -77,7 +83,8 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
     fun logout() {
         viewModelScope.launch {
             tokenStore.clear()
-            token = null
+            email = null
+            apiKey = null
             accountId = null
             _isLoggedIn.value = false
             _apps.value = emptyList()

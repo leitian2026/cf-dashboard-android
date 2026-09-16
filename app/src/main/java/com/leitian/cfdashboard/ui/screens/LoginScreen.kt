@@ -25,8 +25,9 @@ fun LoginScreen(
     viewModel: MainViewModel,
     onLoginSuccess: () -> Unit
 ) {
-    var token by remember { mutableStateOf("") }
-    var showToken by remember { mutableStateOf(false) }
+    var email by remember { mutableStateOf("") }
+    var apiKey by remember { mutableStateOf("") }
+    var showKey by remember { mutableStateOf(false) }
     val isLoading by viewModel.isLoading.collectAsState()
     val error by viewModel.loginError.collectAsState()
     val isLoggedIn by viewModel.isLoggedIn.collectAsState()
@@ -51,25 +52,38 @@ fun LoginScreen(
         )
         Spacer(Modifier.height(8.dp))
         Text(
-            text = "使用 Cloudflare API Token 登录",
+            text = "使用 Global API Key 登录",
             fontSize = 14.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
 
-        Spacer(Modifier.height(40.dp))
+        Spacer(Modifier.height(32.dp))
 
         OutlinedTextField(
-            value = token,
-            onValueChange = { token = it },
-            label = { Text("API Token") },
-            placeholder = { Text("粘贴你的 Cloudflare API Token") },
+            value = email,
+            onValueChange = { email = it },
+            label = { Text("邮箱") },
+            placeholder = { Text("你的 Cloudflare 账号邮箱") },
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
-            visualTransformation = if (showToken) VisualTransformation.None else PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+            shape = RoundedCornerShape(12.dp)
+        )
+
+        Spacer(Modifier.height(12.dp))
+
+        OutlinedTextField(
+            value = apiKey,
+            onValueChange = { apiKey = it },
+            label = { Text("Global API Key") },
+            placeholder = { Text("粘贴 Global API Key") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            visualTransformation = if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
             trailingIcon = {
-                IconButton(onClick = { showToken = !showToken }) {
+                IconButton(onClick = { showKey = !showKey }) {
                     Icon(
-                        if (showToken) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                        if (showKey) Icons.Default.VisibilityOff else Icons.Default.Visibility,
                         contentDescription = null
                     )
                 }
@@ -86,9 +100,9 @@ fun LoginScreen(
         Spacer(Modifier.height(24.dp))
 
         Button(
-            onClick = { viewModel.login(token) },
+            onClick = { viewModel.login(email, apiKey) },
             modifier = Modifier.fillMaxWidth().height(50.dp),
-            enabled = !isLoading && token.isNotBlank(),
+            enabled = !isLoading && email.isNotBlank() && apiKey.isNotBlank(),
             shape = RoundedCornerShape(12.dp)
         ) {
             if (isLoading) {
@@ -112,15 +126,14 @@ fun LoginScreen(
             )
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
-                Text("如何获取 API Token？", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                Text("如何获取 Global API Key？", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                 Spacer(Modifier.height(8.dp))
                 Text(
                     text = "1. 打开 dash.cloudflare.com\n" +
                             "2. 头像 → My Profile → API Tokens\n" +
-                            "3. Create Token\n" +
-                            "4. 权限至少包含：\n" +
-                            "   · Account → Workers Scripts → Read\n" +
-                            "   · Account → Account Settings → Read",
+                            "3. 拉到最下面 → API Keys\n" +
+                            "4. Global API Key 点 View\n" +
+                            "5. 输入密码后复制 Key",
                     fontSize = 13.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     lineHeight = 20.sp
