@@ -3,6 +3,7 @@ package com.leitian.cfdashboard.data
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -97,10 +98,6 @@ object CloudflareApi {
         return if (s.length <= max) s else s.take(max) + "..."
     }
 
-    /**
-     * Cloudflare GraphQL 成功时经常返回 "errors": null
-     * json.has("errors") 在 errors=null 时也是 true，必须再判断非 null 且数组长度>0
-     */
     private fun graphQlHasRealErrors(json: JSONObject): String? {
         if (!json.has("errors") || json.isNull("errors")) return null
         val errArr = json.optJSONArray("errors") ?: return null
@@ -189,6 +186,87 @@ object CloudflareApi {
             }
         }
 
+    /**
+     * 创建 Worker（module 语法 + multipart）
+     * PUT /accounts/{account_id}/workers/scripts/{script_name}
+     */
+    suspend fun createWorker(
+        email: String,
+        apiKey: String,
+        accountId: String,
+        scriptName: String
+    ): ApiResult<String> = withContext(Dispatchers.IO) {
+        try {
+            val name = scriptName.trim()
+            if (name.isEmpty()) {
+                return@withContext ApiResult(false, error = "名称不能为空")
+            }
+            // Cloudflare script name: 字母数字下划线短横线
+            if (!name.matches(Regex("^[a-zA-Z0-9]([a-zA-Z0-9_-]{0,61}[a-zA-Z0-9])?$"))) {
+                return@withContext ApiResult(
+                    false,
+                    error = "名称只能包含字母、数字、_ 和 -，且不能以符号开头/结尾"
+                )
+            }
+
+            val defaultScript = """
+                export default {
+                  async fetch(request, env, ctx) {
+                    return new Response("Hello from $name!", {
+                      headers: { "content-type": "text/plain;charset=UTF-8" },
+                    });
+                  },
+                };
+            """.trimIndent()
+
+            val metadata = JSONObject()
+                .put("main_module", "worker.js")
+                .put("compatibility_date", "2024-09-23")
+                .toString()
+
+            val body = MultipartBody.Builder()
+                .setType(MultipartBody.FORM)
+                .addFormDataPart(
+                    "metadata",
+                    "metadata.json",
+                    metadata.toRequestBody("application/json".toMediaType())
+                )
+                .addFormDataPart(
+                    "worker.js",
+                    "worker.js",
+                    defaultScript.toRequestBody("application/javascript+module".toMediaType())
+                )
+                .build()
+
+            val req = Request.Builder()
+                .url("$BASE/accounts/$accountId/workers/scripts/$name")
+                .addHeader("X-Auth-Email", email)
+                .addHeader("X-Auth-Key", apiKey)
+                .put(body)
+                .build()
+
+            val resp = client.newCall(req).execute()
+            val respBody = resp.body?.string() ?: ""
+
+            if (!resp.isSuccessful) {
+                val json = try { JSONObject(respBody) } catch (_: Exception) { null }
+                val msg = json?.optJSONArray("errors")?.optJSONObject(0)?.optString("message")
+                    ?: truncate(respBody)
+                return@withContext ApiResult(false, error = "创建失败 (${resp.code}): $msg")
+            }
+
+            val json = JSONObject(respBody)
+            if (!json.optBoolean("success", false)) {
+                val msg = json.optJSONArray("errors")?.optJSONObject(0)?.optString("message") ?: "创建失败"
+                return@withContext ApiResult(false, error = msg)
+            }
+
+            ApiResult(true, name)
+        } catch (e: Exception) {
+            ApiResult(false, error = e.message ?: "网络错误")
+        }
+    }
+
     suspend fun getAccountStats(
         email: String,
         apiKey: String,
@@ -230,8 +308,6 @@ object CloudflareApi {
             }
 
             val json = JSONObject(body)
-
-            // 关键：errors:null 不算错误
             graphQlHasRealErrors(json)?.let { msg ->
                 return@withContext ApiResult(false, error = "GraphQL: $msg")
             }
@@ -256,7 +332,6 @@ object CloudflareApi {
                 errors += sum?.optLong("errors") ?: 0L
                 val cpuUs = q?.optDouble("cpuTimeP50") ?: 0.0
                 if (cpuUs > 0) {
-                    // Cloudflare 返回的是微秒
                     cpuSum += cpuUs / 1000.0
                     cpuCount++
                 }
@@ -320,7 +395,6 @@ object CloudflareApi {
             }
 
             val json = JSONObject(body)
-
             graphQlHasRealErrors(json)?.let { msg ->
                 return@withContext ApiResult(false, error = "GraphQL: $msg")
             }

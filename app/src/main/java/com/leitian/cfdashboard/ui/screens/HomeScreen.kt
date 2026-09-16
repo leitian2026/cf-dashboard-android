@@ -36,10 +36,85 @@ fun HomeScreen(
     val isLoading by viewModel.isLoading.collectAsState()
     val stats by viewModel.accountStats.collectAsState()
     val statsError by viewModel.accountStatsError.collectAsState()
+    val createLoading by viewModel.createLoading.collectAsState()
+    val createError by viewModel.createError.collectAsState()
+
     var searchQuery by remember { mutableStateOf("") }
+    var showCreateDialog by remember { mutableStateOf(false) }
+    var newWorkerName by remember { mutableStateOf("") }
 
     val filtered = if (searchQuery.isBlank()) apps
     else apps.filter { it.name.contains(searchQuery, true) || it.subtitle.contains(searchQuery, true) }
+
+    if (showCreateDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                if (!createLoading) {
+                    showCreateDialog = false
+                    newWorkerName = ""
+                    viewModel.clearCreateError()
+                }
+            },
+            title = { Text("创建 Worker") },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = newWorkerName,
+                        onValueChange = { newWorkerName = it },
+                        label = { Text("Worker 名称") },
+                        placeholder = { Text("my-worker") },
+                        singleLine = true,
+                        enabled = !createLoading,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (createError != null) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(createError!!, color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "名称只能包含字母、数字、下划线和短横线",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.createWorker(newWorkerName) {
+                            showCreateDialog = false
+                            newWorkerName = ""
+                            viewModel.clearCreateError()
+                        }
+                    },
+                    enabled = !createLoading && newWorkerName.isNotBlank()
+                ) {
+                    if (createLoading) {
+                        CircularProgressIndicator(
+                            Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.onPrimary
+                        )
+                    } else {
+                        Text("创建")
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        showCreateDialog = false
+                        newWorkerName = ""
+                        viewModel.clearCreateError()
+                    },
+                    enabled = !createLoading
+                ) {
+                    Text("取消")
+                }
+            }
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -59,7 +134,10 @@ fun HomeScreen(
                         Icon(Icons.Outlined.Logout, contentDescription = "退出")
                     }
                     Button(
-                        onClick = { },
+                        onClick = {
+                            viewModel.clearCreateError()
+                            showCreateDialog = true
+                        },
                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
                         shape = RoundedCornerShape(8.dp),
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)

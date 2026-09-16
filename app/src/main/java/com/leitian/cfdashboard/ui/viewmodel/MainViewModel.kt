@@ -42,6 +42,12 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
     private val _metricsError = MutableStateFlow<String?>(null)
     val metricsError: StateFlow<String?> = _metricsError.asStateFlow()
 
+    private val _createLoading = MutableStateFlow(false)
+    val createLoading: StateFlow<Boolean> = _createLoading.asStateFlow()
+
+    private val _createError = MutableStateFlow<String?>(null)
+    val createError: StateFlow<String?> = _createError.asStateFlow()
+
     private var email: String? = null
     private var apiKey: String? = null
     private var accountId: String? = null
@@ -109,10 +115,6 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
             val result = CloudflareApi.getAccountStats(e, k, a)
             if (result.success) {
                 _accountStats.value = result.data
-                if (result.data != null && result.data.requests == 0L) {
-                    // 0 可能是真没流量，也可能是 GraphQL 权限/查询问题
-                    _accountStatsError.value = result.error
-                }
             } else {
                 _accountStatsError.value = result.error ?: "账号统计拉取失败"
             }
@@ -132,12 +134,6 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
             val metricsResult = CloudflareApi.getWorkerMetrics(e, k, a, scriptName)
             if (metricsResult.success) {
                 _metrics.value = metricsResult.data
-                if (metricsResult.data != null &&
-                    metricsResult.data.totalRequests == 0L &&
-                    metricsResult.error != null
-                ) {
-                    _metricsError.value = metricsResult.error
-                }
             } else {
                 _metricsError.value = metricsResult.error ?: "指标拉取失败"
             }
@@ -155,6 +151,33 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
         _metrics.value = null
         _scriptInfo.value = null
         _metricsError.value = null
+    }
+
+    fun clearCreateError() {
+        _createError.value = null
+    }
+
+    /** 创建 Worker，成功后刷新列表 */
+    fun createWorker(name: String, onSuccess: () -> Unit) {
+        val e = email
+        val k = apiKey
+        val a = accountId
+        if (e == null || k == null || a == null) {
+            _createError.value = "未登录"
+            return
+        }
+        viewModelScope.launch {
+            _createLoading.value = true
+            _createError.value = null
+            val result = CloudflareApi.createWorker(e, k, a, name)
+            if (result.success) {
+                loadApps()
+                onSuccess()
+            } else {
+                _createError.value = result.error ?: "创建失败"
+            }
+            _createLoading.value = false
+        }
     }
 
     fun logout() {
