@@ -3,8 +3,7 @@ package com.leitian.cfdashboard.ui.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
-import com.leitian.cfdashboard.data.CloudflareApi
-import com.leitian.cfdashboard.data.TokenStore
+import com.leitian.cfdashboard.data.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -47,6 +46,30 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
 
     private val _createError = MutableStateFlow<String?>(null)
     val createError: StateFlow<String?> = _createError.asStateFlow()
+
+    // 详情 Tab 数据
+    private val _deployments = MutableStateFlow<List<DeploymentItem>>(emptyList())
+    val deployments: StateFlow<List<DeploymentItem>> = _deployments.asStateFlow()
+    private val _deploymentsError = MutableStateFlow<String?>(null)
+    val deploymentsError: StateFlow<String?> = _deploymentsError.asStateFlow()
+
+    private val _domains = MutableStateFlow<List<DomainItem>>(emptyList())
+    val domains: StateFlow<List<DomainItem>> = _domains.asStateFlow()
+    private val _domainsError = MutableStateFlow<String?>(null)
+    val domainsError: StateFlow<String?> = _domainsError.asStateFlow()
+
+    private val _accessApps = MutableStateFlow<List<AccessAppItem>>(emptyList())
+    val accessApps: StateFlow<List<AccessAppItem>> = _accessApps.asStateFlow()
+    private val _accessError = MutableStateFlow<String?>(null)
+    val accessError: StateFlow<String?> = _accessError.asStateFlow()
+
+    private val _settingsDetail = MutableStateFlow<WorkerSettingsDetail?>(null)
+    val settingsDetail: StateFlow<WorkerSettingsDetail?> = _settingsDetail.asStateFlow()
+    private val _settingsError = MutableStateFlow<String?>(null)
+    val settingsError: StateFlow<String?> = _settingsError.asStateFlow()
+
+    private val _tabLoading = MutableStateFlow(false)
+    val tabLoading: StateFlow<Boolean> = _tabLoading.asStateFlow()
 
     private var email: String? = null
     private var apiKey: String? = null
@@ -99,9 +122,7 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
         viewModelScope.launch {
             _isLoading.value = true
             val result = CloudflareApi.getApps(e, k, a)
-            if (result.success) {
-                _apps.value = result.data ?: emptyList()
-            }
+            if (result.success) _apps.value = result.data ?: emptyList()
             _isLoading.value = false
         }
     }
@@ -113,11 +134,8 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
         viewModelScope.launch {
             _accountStatsError.value = null
             val result = CloudflareApi.getAccountStats(e, k, a)
-            if (result.success) {
-                _accountStats.value = result.data
-            } else {
-                _accountStatsError.value = result.error ?: "账号统计拉取失败"
-            }
+            if (result.success) _accountStats.value = result.data
+            else _accountStatsError.value = result.error
         }
     }
 
@@ -127,23 +145,37 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
         val a = accountId ?: return
         viewModelScope.launch {
             _metricsLoading.value = true
+            _tabLoading.value = true
             _metrics.value = null
             _scriptInfo.value = null
             _metricsError.value = null
 
             val metricsResult = CloudflareApi.getWorkerMetrics(e, k, a, scriptName)
-            if (metricsResult.success) {
-                _metrics.value = metricsResult.data
-            } else {
-                _metricsError.value = metricsResult.error ?: "指标拉取失败"
-            }
+            if (metricsResult.success) _metrics.value = metricsResult.data
+            else _metricsError.value = metricsResult.error
 
             val infoResult = CloudflareApi.getScriptInfo(e, k, a, scriptName)
-            if (infoResult.success) {
-                _scriptInfo.value = infoResult.data
-            }
+            if (infoResult.success) _scriptInfo.value = infoResult.data
+
+            // 并行拉四个 Tab 数据
+            val dep = CloudflareDetailApi.listDeployments(e, k, a, scriptName)
+            if (dep.success) _deployments.value = dep.data ?: emptyList()
+            else _deploymentsError.value = dep.error
+
+            val dom = CloudflareDetailApi.listDomains(e, k, a, scriptName)
+            if (dom.success) _domains.value = dom.data ?: emptyList()
+            else _domainsError.value = dom.error
+
+            val acc = CloudflareDetailApi.listAccessApps(e, k, a)
+            if (acc.success) _accessApps.value = acc.data ?: emptyList()
+            else _accessError.value = acc.error
+
+            val set = CloudflareDetailApi.getSettingsDetail(e, k, a, scriptName)
+            if (set.success) _settingsDetail.value = set.data
+            else _settingsError.value = set.error
 
             _metricsLoading.value = false
+            _tabLoading.value = false
         }
     }
 
@@ -151,13 +183,18 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
         _metrics.value = null
         _scriptInfo.value = null
         _metricsError.value = null
+        _deployments.value = emptyList()
+        _domains.value = emptyList()
+        _accessApps.value = emptyList()
+        _settingsDetail.value = null
+        _deploymentsError.value = null
+        _domainsError.value = null
+        _accessError.value = null
+        _settingsError.value = null
     }
 
-    fun clearCreateError() {
-        _createError.value = null
-    }
+    fun clearCreateError() { _createError.value = null }
 
-    /** 创建 Worker，成功后刷新列表 */
     fun createWorker(name: String, onSuccess: () -> Unit) {
         val e = email
         val k = apiKey
@@ -189,8 +226,7 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
             _isLoggedIn.value = false
             _apps.value = emptyList()
             _accountStats.value = null
-            _metrics.value = null
-            _scriptInfo.value = null
+            clearDetail()
         }
     }
 }
