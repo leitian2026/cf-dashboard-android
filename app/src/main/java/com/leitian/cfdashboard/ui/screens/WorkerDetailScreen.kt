@@ -21,19 +21,30 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.leitian.cfdashboard.data.CloudflareApi
+import com.leitian.cfdashboard.ui.viewmodel.MainViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WorkerDetailScreen(
     appId: String,
     appName: String,
+    viewModel: MainViewModel,
     onBack: () -> Unit
 ) {
     var selectedTab by remember { mutableIntStateOf(0) }
     val tabs = listOf("概述", "指标", "部署", "绑定", "Observability", "域", "Access", "设置")
 
-    val requestPoints = listOf(120f, 80f, 200f, 90f, 110f, 70f, 95f, 130f, 85f, 100f, 140f, 110f)
-    val cpuPoints = listOf(3.2f, 3.5f, 4.1f, 3.8f, 4.5f, 3.9f, 4.2f, 5.1f, 3.7f, 4.0f, 4.3f, 3.9f)
+    val metrics by viewModel.metrics.collectAsState()
+    val metricsLoading by viewModel.metricsLoading.collectAsState()
+
+    LaunchedEffect(appName) {
+        viewModel.loadMetrics(appName)
+    }
+
+    DisposableEffect(Unit) {
+        onDispose { viewModel.clearMetrics() }
+    }
 
     Scaffold(
         topBar = {
@@ -67,8 +78,11 @@ fun WorkerDetailScreen(
                         selected = selectedTab == index,
                         onClick = { selectedTab = index },
                         text = {
-                            Text(title, fontSize = 13.sp,
-                                fontWeight = if (selectedTab == index) FontWeight.SemiBold else FontWeight.Normal)
+                            Text(
+                                title,
+                                fontSize = 13.sp,
+                                fontWeight = if (selectedTab == index) FontWeight.SemiBold else FontWeight.Normal
+                            )
                         }
                     )
                 }
@@ -84,7 +98,10 @@ fun WorkerDetailScreen(
                     shape = RoundedCornerShape(12.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                 ) {
-                    Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Text("🌐", fontSize = 18.sp)
                         Spacer(Modifier.width(8.dp))
                         Column(Modifier.weight(1f)) {
@@ -94,29 +111,56 @@ fun WorkerDetailScreen(
                                 fontSize = 14.sp,
                                 color = MaterialTheme.colorScheme.secondary
                             )
-                            Text("Automatic deployment on upload.", fontSize = 12.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(
+                                "Automatic deployment on upload.",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                     }
                 }
 
                 BindingDiagram(appName)
 
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("指标", fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
                         Spacer(Modifier.width(8.dp))
                         Surface(shape = RoundedCornerShape(4.dp), color = Color(0xFFF0F0F0)) {
-                            Text("最后一个 24 小时", fontSize = 11.sp,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
+                            Text(
+                                "最后一个 24 小时",
+                                fontSize = 11.sp,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
                         }
                     }
-                    Text("→", color = MaterialTheme.colorScheme.primary)
+                    if (metricsLoading) {
+                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                    }
                 }
 
-                MetricCard("调用次数", "—", requestPoints, Color(0xFF3B82F6))
-                MetricCard("CPU 时间", "—", cpuPoints, Color(0xFF3B82F6))
+                val m = metrics
+                val reqValue = if (m != null) CloudflareApi.formatCount(m.totalRequests) else if (metricsLoading) "..." else "0"
+                val cpuValue = if (m != null) CloudflareApi.formatCpu(m.cpuTimeMs) else if (metricsLoading) "..." else "0 ms"
+                val errValue = if (m != null) m.totalErrors.toString() else if (metricsLoading) "..." else "0"
+
+                MetricCard(
+                    title = "调用次数",
+                    value = reqValue,
+                    points = m?.requestPoints ?: emptyList(),
+                    lineColor = Color(0xFF3B82F6)
+                )
+
+                MetricCard(
+                    title = "CPU 时间",
+                    value = cpuValue,
+                    points = m?.cpuPoints ?: emptyList(),
+                    lineColor = Color(0xFF3B82F6)
+                )
 
                 Card(
                     Modifier.fillMaxWidth(),
@@ -126,10 +170,20 @@ fun WorkerDetailScreen(
                     Column(Modifier.padding(16.dp)) {
                         Text("错误", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Spacer(Modifier.height(4.dp))
-                        Text("0", fontWeight = FontWeight.Bold, fontSize = 28.sp)
+                        Text(errValue, fontWeight = FontWeight.Bold, fontSize = 28.sp)
                         Spacer(Modifier.height(12.dp))
-                        Box(Modifier.fillMaxWidth().height(40.dp)
-                            .background(Color(0xFFFAFAFA), RoundedCornerShape(4.dp)))
+                        if (m != null && m.errorPoints.isNotEmpty()) {
+                            SimpleLineChart(
+                                points = m.errorPoints,
+                                lineColor = Color(0xFFEF4444),
+                                modifier = Modifier.fillMaxWidth().height(40.dp)
+                            )
+                        } else {
+                            Box(
+                                Modifier.fillMaxWidth().height(40.dp)
+                                    .background(Color(0xFFFAFAFA), RoundedCornerShape(4.dp))
+                            )
+                        }
                     }
                 }
 
@@ -153,8 +207,12 @@ private fun BindingDiagram(appName: String) {
                     BindingChip("Workers  —")
                     BindingChip("Queues  —")
                 }
-                Text("→", fontSize = 20.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 8.dp))
+                Text(
+                    "→",
+                    fontSize = 20.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 8.dp)
+                )
                 Card(
                     Modifier.weight(1.2f),
                     shape = RoundedCornerShape(10.dp),
@@ -220,7 +278,21 @@ private fun MetricCard(title: String, value: String, points: List<Float>, lineCo
             Spacer(Modifier.height(4.dp))
             Text(value, fontWeight = FontWeight.Bold, fontSize = 28.sp)
             Spacer(Modifier.height(12.dp))
-            SimpleLineChart(points, lineColor, Modifier.fillMaxWidth().height(80.dp))
+            if (points.isNotEmpty()) {
+                SimpleLineChart(
+                    points = points,
+                    lineColor = lineColor,
+                    modifier = Modifier.fillMaxWidth().height(80.dp)
+                )
+            } else {
+                Box(
+                    Modifier.fillMaxWidth().height(80.dp)
+                        .background(Color(0xFFFAFAFA), RoundedCornerShape(4.dp)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("暂无数据", fontSize = 12.sp, color = Color.Gray)
+                }
+            }
         }
     }
 }
@@ -228,20 +300,22 @@ private fun MetricCard(title: String, value: String, points: List<Float>, lineCo
 @Composable
 private fun SimpleLineChart(points: List<Float>, lineColor: Color, modifier: Modifier = Modifier) {
     if (points.isEmpty()) return
-    val maxY = points.maxOrNull() ?: 1f
-    val minY = (points.minOrNull() ?: 0f).coerceAtMost(0f)
+    val maxY = points.maxOrNull()?.coerceAtLeast(1f) ?: 1f
+    val minY = 0f
     val rangeY = (maxY - minY).coerceAtLeast(1f)
 
     Canvas(modifier) {
         val width = size.width
         val height = size.height
-        val stepX = width / (points.size - 1).coerceAtLeast(1)
+        val stepX = if (points.size > 1) width / (points.size - 1) else width
+
         val path = Path()
         points.forEachIndexed { index, value ->
             val x = index * stepX
             val y = height - ((value - minY) / rangeY) * height * 0.85f - height * 0.05f
             if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
         }
+
         val fillPath = Path().apply {
             addPath(path)
             lineTo(width, height)

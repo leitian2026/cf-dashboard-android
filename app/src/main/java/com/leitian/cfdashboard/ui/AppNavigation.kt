@@ -65,6 +65,7 @@ fun AppNavigation() {
             WorkerDetailScreen(
                 appId = appId,
                 appName = appName,
+                viewModel = viewModel,
                 onBack = { navController.popBackStack() }
             )
         }

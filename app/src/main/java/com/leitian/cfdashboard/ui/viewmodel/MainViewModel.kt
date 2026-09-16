@@ -24,6 +24,12 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
     private val _apps = MutableStateFlow<List<CloudflareApi.AppItem>>(emptyList())
     val apps: StateFlow<List<CloudflareApi.AppItem>> = _apps.asStateFlow()
 
+    private val _metrics = MutableStateFlow<CloudflareApi.WorkerMetrics?>(null)
+    val metrics: StateFlow<CloudflareApi.WorkerMetrics?> = _metrics.asStateFlow()
+
+    private val _metricsLoading = MutableStateFlow(false)
+    val metricsLoading: StateFlow<Boolean> = _metricsLoading.asStateFlow()
+
     private var email: String? = null
     private var apiKey: String? = null
     private var accountId: String? = null
@@ -80,6 +86,25 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
         }
     }
 
+    fun loadMetrics(scriptName: String) {
+        val e = email ?: return
+        val k = apiKey ?: return
+        val a = accountId ?: return
+        viewModelScope.launch {
+            _metricsLoading.value = true
+            _metrics.value = null
+            val result = CloudflareApi.getWorkerMetrics(e, k, a, scriptName)
+            if (result.success) {
+                _metrics.value = result.data
+            }
+            _metricsLoading.value = false
+        }
+    }
+
+    fun clearMetrics() {
+        _metrics.value = null
+    }
+
     fun logout() {
         viewModelScope.launch {
             tokenStore.clear()
@@ -88,6 +113,7 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
             accountId = null
             _isLoggedIn.value = false
             _apps.value = emptyList()
+            _metrics.value = null
         }
     }
 }
