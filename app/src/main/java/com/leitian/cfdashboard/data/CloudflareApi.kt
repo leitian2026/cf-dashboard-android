@@ -267,6 +267,82 @@ object CloudflareApi {
         }
     }
 
+    /**
+     * 上传/更新 Worker 脚本（单文件 ES Module）
+     * PUT /accounts/{account_id}/workers/scripts/{script_name}
+     */
+    suspend fun uploadWorkerScript(
+        email: String,
+        apiKey: String,
+        accountId: String,
+        scriptName: String,
+        fileName: String,
+        bytes: ByteArray
+    ): ApiResult<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val name = scriptName.trim()
+            if (name.isEmpty()) {
+                return@withContext ApiResult(false, error = "名称不能为空")
+            }
+            if (bytes.isEmpty()) {
+                return@withContext ApiResult(false, error = "文件内容为空")
+            }
+
+            // Cloudflare 要求 main_module 与 part 名一致
+            val moduleName = when {
+                fileName.endsWith(".js", ignoreCase = true) ||
+                fileName.endsWith(".mjs", ignoreCase = true) -> fileName.substringAfterLast('/')
+                else -> "worker.js"
+            }
+
+            val metadata = JSONObject()
+                .put("main_module", moduleName)
+                .put("compatibility_date", "2024-09-23")
+                .toString()
+
+            val body = MultipartBody.Builder()
+                .setType(MultipartBody.FORM)
+                .addFormDataPart(
+                    "metadata",
+                    "metadata.json",
+                    metadata.toRequestBody("application/json".toMediaType())
+                )
+                .addFormDataPart(
+                    moduleName,
+                    moduleName,
+                    bytes.toRequestBody("application/javascript+module".toMediaType())
+                )
+                .build()
+
+            val req = Request.Builder()
+                .url("$BASE/accounts/$accountId/workers/scripts/$name")
+                .addHeader("X-Auth-Email", email)
+                .addHeader("X-Auth-Key", apiKey)
+                .put(body)
+                .build()
+
+            val resp = client.newCall(req).execute()
+            val respBody = resp.body?.string() ?: ""
+
+            if (!resp.isSuccessful) {
+                val json = try { JSONObject(respBody) } catch (_: Exception) { null }
+                val msg = json?.optJSONArray("errors")?.optJSONObject(0)?.optString("message")
+                    ?: truncate(respBody)
+                return@withContext ApiResult(false, error = "上传失败 (${resp.code}): $msg")
+            }
+
+            val json = JSONObject(respBody)
+            if (!json.optBoolean("success", false)) {
+                val msg = json.optJSONArray("errors")?.optJSONObject(0)?.optString("message") ?: "上传失败"
+                return@withContext ApiResult(false, error = msg)
+            }
+
+            ApiResult(true, Unit)
+        } catch (e: Exception) {
+            ApiResult(false, error = e.message ?: "网络错误")
+        }
+    }
+
     suspend fun getAccountStats(
         email: String,
         apiKey: String,
