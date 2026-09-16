@@ -22,7 +22,8 @@ object CloudflareApi {
 
     private val client: OkHttpClient by lazy {
         val logging = HttpLoggingInterceptor().apply {
-            level = HttpLoggingInterceptor.Level.BASIC
+            // BODY 才能在 Logcat 看到 GraphQL 真实错误内容
+            level = HttpLoggingInterceptor.Level.BODY
         }
         OkHttpClient.Builder()
             .addInterceptor(logging)
@@ -91,6 +92,10 @@ object CloudflareApi {
         val end = Date()
         val start = Date(end.time - hours * 60L * 60L * 1000L)
         return sdf.format(start) to sdf.format(end)
+    }
+
+    private fun truncate(s: String, max: Int = 300): String {
+        return if (s.length <= max) s else s.take(max) + "..."
     }
 
     suspend fun verifyGlobalKey(email: String, apiKey: String): ApiResult<Account> =
@@ -211,13 +216,22 @@ object CloudflareApi {
             val resp = client.newCall(req).execute()
             val body = resp.body?.string() ?: ""
 
+            // 不再静默吞错：HTTP 失败直接带错误信息返回
             if (!resp.isSuccessful) {
-                return@withContext ApiResult(true, AccountStats(0, 0, 0.0))
+                return@withContext ApiResult(
+                    false,
+                    error = "HTTP ${resp.code}: ${truncate(body)}"
+                )
             }
 
             val json = JSONObject(body)
+
+            // GraphQL 业务错误也要暴露
             if (json.has("errors")) {
-                return@withContext ApiResult(true, AccountStats(0, 0, 0.0))
+                val errArr = json.optJSONArray("errors")
+                val msg = errArr?.optJSONObject(0)?.optString("message")
+                    ?: truncate(body)
+                return@withContext ApiResult(false, error = "GraphQL: $msg")
             }
 
             val rows = json.optJSONObject("data")
@@ -246,13 +260,14 @@ object CloudflareApi {
             }
 
             val avgCpu = if (cpuCount > 0) cpuSum / cpuCount else 0.0
+            // 真正没流量：success=true, data 全 0, error=null
             ApiResult(true, AccountStats(requests, errors, avgCpu))
         } catch (e: Exception) {
-            ApiResult(true, AccountStats(0, 0, 0.0))
+            ApiResult(false, error = e.message ?: "网络错误")
         }
     }
 
-    /** 单个 Worker 最近 24h 真实指标（官方 GraphQL） */
+    /** 单个 Worker 最近 24h 真实指标 */
     suspend fun getWorkerMetrics(
         email: String,
         apiKey: String,
@@ -262,7 +277,6 @@ object CloudflareApi {
         try {
             val (start, end) = utcNowMinusHours(24)
 
-            // 官方文档写法：dimensions.datetime + sum + quantiles
             val query = """
                 query {
                   viewer {
@@ -301,17 +315,18 @@ object CloudflareApi {
             val body = resp.body?.string() ?: ""
 
             if (!resp.isSuccessful) {
-                return@withContext ApiResult(false, error = "指标请求失败 (${resp.code})")
+                return@withContext ApiResult(
+                    false,
+                    error = "HTTP ${resp.code}: ${truncate(body)}"
+                )
             }
 
             val json = JSONObject(body)
+
             if (json.has("errors")) {
-                val msg = json.optJSONArray("errors")?.optJSONObject(0)?.optString("message") ?: "GraphQL error"
-                // 无权限或无数据时返回空，不打断 UI
-                return@withContext ApiResult(
-                    true,
-                    WorkerMetrics(0, 0, 0.0, emptyList(), emptyList(), emptyList())
-                )
+                val msg = json.optJSONArray("errors")?.optJSONObject(0)?.optString("message")
+                    ?: truncate(body)
+                return@withContext ApiResult(false, error = "GraphQL: $msg")
             }
 
             val rows = json.optJSONObject("data")
@@ -321,7 +336,6 @@ object CloudflareApi {
                 ?.optJSONArray("workersInvocationsAdaptive")
                 ?: JSONArray()
 
-            // 按小时聚合，方便画折线
             val hourReq = linkedMapOf<String, Long>()
             val hourErr = linkedMapOf<String, Long>()
             val hourCpu = linkedMapOf<String, MutableList<Double>>()
@@ -362,7 +376,7 @@ object CloudflareApi {
             val errorPoints = sortedHours.map { (hourErr[it] ?: 0L).toFloat() }
             val cpuPoints = sortedHours.map { h ->
                 val list = hourCpu[h]
-                if (list.isNullOrEmpty()) 0f else (list.average()).toFloat()
+                if (list.isNullOrEmpty()) 0f else list.average().toFloat()
             }
 
             val avgCpu = if (cpuCnt > 0) cpuSum / cpuCnt else 0.0
@@ -383,7 +397,6 @@ object CloudflareApi {
         }
     }
 
-    /** 脚本设置：Observability / 子域名 */
     suspend fun getScriptInfo(
         email: String,
         apiKey: String,
@@ -391,7 +404,6 @@ object CloudflareApi {
         scriptName: String
     ): ApiResult<ScriptInfo> = withContext(Dispatchers.IO) {
         try {
-            // settings（含 observability）
             var logsEnabled = false
             var tracesEnabled = false
             var bindingCount = 0
@@ -409,12 +421,10 @@ object CloudflareApi {
                     val obs = result?.optJSONObject("observability")
                     logsEnabled = obs?.optBoolean("enabled", false) == true ||
                             obs?.optJSONObject("logs")?.optBoolean("enabled", false) == true
-                    // traces 字段因版本可能不同，尽量兼容
                     tracesEnabled = obs?.optJSONObject("traces")?.optBoolean("enabled", false) == true
                 }
             }
 
-            // bindings 数量
             val bindReq = authGet(
                 email, apiKey,
                 "$BASE/accounts/$accountId/workers/scripts/$scriptName/settings"
@@ -439,10 +449,7 @@ object CloudflareApi {
                 )
             )
         } catch (e: Exception) {
-            ApiResult(
-                true,
-                ScriptInfo("$scriptName.workers.dev", false, false, 0)
-            )
+            ApiResult(false, error = e.message ?: "读取脚本设置失败")
         }
     }
 
