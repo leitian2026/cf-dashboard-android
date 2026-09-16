@@ -1,5 +1,8 @@
 package com.leitian.cfdashboard.ui.viewmodel
 
+import android.content.Context
+import android.net.Uri
+import android.provider.OpenableColumns
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -70,6 +73,17 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
 
     private val _tabLoading = MutableStateFlow(false)
     val tabLoading: StateFlow<Boolean> = _tabLoading.asStateFlow()
+
+    // 上传部署状态
+    sealed class UploadState {
+        object Idle : UploadState()
+        object Loading : UploadState()
+        data class Success(val message: String = "部署成功") : UploadState()
+        data class Error(val message: String) : UploadState()
+    }
+
+    private val _uploadState = MutableStateFlow<UploadState>(UploadState.Idle)
+    val uploadState: StateFlow<UploadState> = _uploadState.asStateFlow()
 
     private var email: String? = null
     private var apiKey: String? = null
@@ -191,9 +205,12 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
         _domainsError.value = null
         _accessError.value = null
         _settingsError.value = null
+        _uploadState.value = UploadState.Idle
     }
 
     fun clearCreateError() { _createError.value = null }
+
+    fun clearUploadState() { _uploadState.value = UploadState.Idle }
 
     fun createWorker(name: String, onSuccess: () -> Unit) {
         val e = email
@@ -214,6 +231,49 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
                 _createError.value = result.error ?: "创建失败"
             }
             _createLoading.value = false
+        }
+    }
+
+    /**
+     * 从手机选择的文件上传并部署 Worker 脚本
+     */
+    fun uploadScript(scriptName: String, uri: Uri, context: Context) {
+        val e = email
+        val k = apiKey
+        val a = accountId
+        if (e == null || k == null || a == null) {
+            _uploadState.value = UploadState.Error("未登录")
+            return
+        }
+        viewModelScope.launch {
+            _uploadState.value = UploadState.Loading
+            try {
+                val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                if (bytes == null || bytes.isEmpty()) {
+                    _uploadState.value = UploadState.Error("无法读取文件或文件为空")
+                    return@launch
+                }
+
+                var fileName = "worker.js"
+                context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                    val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (nameIndex >= 0 && cursor.moveToFirst()) {
+                        val name = cursor.getString(nameIndex)
+                        if (!name.isNullOrBlank()) fileName = name
+                    }
+                }
+
+                val result = CloudflareApi.uploadWorkerScript(e, k, a, scriptName, fileName, bytes)
+                if (result.success) {
+                    _uploadState.value = UploadState.Success("部署成功：$fileName")
+                    // 刷新详情（部署列表等）
+                    loadDetail(scriptName)
+                } else {
+                    _uploadState.value = UploadState.Error(result.error ?: "上传失败")
+                }
+            } catch (ex: Exception) {
+                _uploadState.value = UploadState.Error(ex.message ?: "上传异常")
+            }
         }
     }
 
