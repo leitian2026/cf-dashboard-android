@@ -292,13 +292,7 @@ fun TopologyNode(
             .padding(horizontal = 10.dp, vertical = 8.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                title,
-                fontWeight = FontWeight.Medium,
-                fontSize = 13.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+            Text(title, fontWeight = FontWeight.Medium, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (badge != null) {
                 Spacer(Modifier.width(6.dp))
                 Surface(shape = CircleShape, color = CfColors.Link) {
@@ -316,6 +310,57 @@ fun TopologyNode(
             Text(subtitle, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
+}
+
+/**
+ * 危险操作二次确认弹窗（删除变量 / 删除绑定 / 删除 Worker / 删除 Cron 等通用）。
+ * requireTypedName 不为空时，要求用户手动输入该名称才能确认，防误触。
+ */
+@Composable
+fun CfConfirmDangerDialog(
+    title: String,
+    message: String,
+    confirmText: String = "删除",
+    requireTypedName: String? = null,
+    loading: Boolean = false,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    var typed by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf("") }
+    val canConfirm = requireTypedName == null || typed == requireTypedName
+    AlertDialog(
+        onDismissRequest = { if (!loading) onDismiss() },
+        title = { Text(title) },
+        text = {
+            Column {
+                Text(message)
+                if (requireTypedName != null) {
+                    Spacer(Modifier.height(12.dp))
+                    Text("请输入「$requireTypedName」以确认", fontSize = 12.sp, color = CfColors.GrayText)
+                    Spacer(Modifier.height(4.dp))
+                    OutlinedTextField(
+                        value = typed,
+                        onValueChange = { typed = it },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = onConfirm,
+                enabled = canConfirm && !loading,
+                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+            ) {
+                if (loading) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                else Text(confirmText)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !loading) { Text("取消") }
+        }
+    )
 }
 
 @Composable
