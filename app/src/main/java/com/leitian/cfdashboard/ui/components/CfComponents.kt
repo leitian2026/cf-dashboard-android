@@ -8,6 +8,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -83,7 +87,10 @@ fun CfSectionTitle(
     trailing: @Composable (() -> Unit)? = null
 ) {
     Column(modifier.fillMaxWidth()) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             Text(title, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
             Spacer(Modifier.weight(1f))
             trailing?.invoke()
@@ -136,7 +143,9 @@ fun CfTableRow(
             verticalAlignment = Alignment.CenterVertically,
             content = content
         )
-        if (showDivider) HorizontalDivider(color = CfColors.Border, thickness = 1.dp)
+        if (showDivider) {
+            HorizontalDivider(color = CfColors.Border, thickness = 1.dp)
+        }
     }
 }
 
@@ -151,7 +160,7 @@ fun ProgressWithLabel(
             progress = { progress.coerceIn(0f, 1f) },
             modifier = Modifier.fillMaxWidth().height(8.dp),
             color = CfColors.AreaBlue,
-            trackColor = CfColors.GrayBg
+            trackColor = CfColors.GrayBg,
         )
         Text(
             label,
@@ -242,12 +251,22 @@ fun BarChart(
         val dash = PathEffect.dashPathEffect(floatArrayOf(6f, 6f), 0f)
         for (i in 1..3) {
             val y = size.height * i / 4f
-            drawLine(CfColors.Border, Offset(0f, y), Offset(size.width, y), 1f, pathEffect = dash)
+            drawLine(
+                color = CfColors.Border,
+                start = Offset(0f, y),
+                end = Offset(size.width, y),
+                strokeWidth = 1f,
+                pathEffect = dash
+            )
         }
         values.forEachIndexed { i, v ->
             val h = (v / maxV) * size.height * 0.9f
             val x = gap + i * (barW + gap)
-            drawRect(barColor, Offset(x, size.height - h), androidx.compose.ui.geometry.Size(barW, h))
+            drawRect(
+                color = barColor,
+                topLeft = Offset(x, size.height - h),
+                size = androidx.compose.ui.geometry.Size(barW, h)
+            )
         }
     }
 }
@@ -326,7 +345,7 @@ fun CfConfirmDangerDialog(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    var typed by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf("") }
+    var typed by remember { mutableStateOf("") }
     val canConfirm = requireTypedName == null || typed == requireTypedName
     AlertDialog(
         onDismissRequest = { if (!loading) onDismiss() },
