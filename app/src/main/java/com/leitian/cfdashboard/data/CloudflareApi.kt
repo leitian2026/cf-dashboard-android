@@ -1,6 +1,8 @@
 package com.leitian.cfdashboard.data
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
@@ -267,18 +269,41 @@ object CloudflareApi {
             }
         }
 
+    /**
+     * 方案 A：并行两次 GraphQL。
+     * - 汇总（无 dimensions）：卡片用真实 24h 总量与 cpuTimeP50 中位数
+     * - 分时（带 datetime）：图表用 15 分钟桶序列
+     */
     suspend fun getWorkerMetrics(
         email: String, apiKey: String, accountId: String, scriptName: String
     ): ApiResult<WorkerMetrics> = withContext(Dispatchers.IO) {
         try {
             val (start, end) = last24HoursRange()
-            val query = """
+            val filter = """scriptName: "$scriptName", datetime_geq: "$start", datetime_leq: "$end""""
+
+            val summaryQuery = """
+                query {
+                  viewer {
+                    accounts(filter: {accountTag: "$accountId"}) {
+                      workersInvocationsAdaptive(
+                        limit: 1,
+                        filter: { $filter }
+                      ) {
+                        sum { requests errors }
+                        quantiles { cpuTimeP50 }
+                      }
+                    }
+                  }
+                }
+            """.trimIndent()
+
+            val seriesQuery = """
                 query {
                   viewer {
                     accounts(filter: {accountTag: "$accountId"}) {
                       workersInvocationsAdaptive(
                         limit: 10000,
-                        filter: { scriptName: "$scriptName", datetime_geq: "$start", datetime_leq: "$end" }
+                        filter: { $filter }
                       ) {
                         sum { requests errors }
                         quantiles { cpuTimeP50 }
@@ -288,31 +313,86 @@ object CloudflareApi {
                   }
                 }
             """.trimIndent()
-            val resp = client.newCall(authPost(email, apiKey, GRAPHQL, JSONObject().put("query", query).toString())).execute()
-            val body = resp.body?.string() ?: ""
-            if (!resp.isSuccessful) return@withContext ApiResult(false, error = "指标查询失败 (${resp.code})")
-            val json = JSONObject(body)
-            graphQlHasRealErrors(json)?.let { return@withContext ApiResult(false, error = it) }
-            val rows = json.optJSONObject("data")?.optJSONObject("viewer")?.optJSONArray("accounts")?.optJSONObject(0)?.optJSONArray("workersInvocationsAdaptive") ?: JSONArray()
+
+            data class GqlOutcome(val ok: Boolean, val rows: JSONArray, val error: String? = null)
+
+            fun runQuery(query: String): GqlOutcome {
+                val resp = client.newCall(
+                    authPost(email, apiKey, GRAPHQL, JSONObject().put("query", query).toString())
+                ).execute()
+                val body = resp.body?.string() ?: ""
+                if (!resp.isSuccessful) {
+                    return GqlOutcome(false, JSONArray(), "指标查询失败 (${resp.code})")
+                }
+                val json = JSONObject(body)
+                graphQlHasRealErrors(json)?.let {
+                    return GqlOutcome(false, JSONArray(), it)
+                }
+                val rows = json.optJSONObject("data")
+                    ?.optJSONObject("viewer")
+                    ?.optJSONArray("accounts")
+                    ?.optJSONObject(0)
+                    ?.optJSONArray("workersInvocationsAdaptive")
+                    ?: JSONArray()
+                return GqlOutcome(true, rows)
+            }
+
+            val (summary, series) = coroutineScope {
+                val s = async { runQuery(summaryQuery) }
+                val t = async { runQuery(seriesQuery) }
+                s.await() to t.await()
+            }
+
+            if (!summary.ok && !series.ok) {
+                return@withContext ApiResult(false, error = summary.error ?: series.error ?: "指标查询失败")
+            }
+
+            var totalReq = 0L
+            var totalErr = 0L
+            var cpuMs = 0.0
+            if (summary.ok && summary.rows.length() > 0) {
+                for (i in 0 until summary.rows.length()) {
+                    val row = summary.rows.getJSONObject(i)
+                    val sum = row.optJSONObject("sum")
+                    val q = row.optJSONObject("quantiles")
+                    totalReq += sum?.optLong("requests") ?: 0L
+                    totalErr += sum?.optLong("errors") ?: 0L
+                    val cpuUs = q?.optDouble("cpuTimeP50") ?: 0.0
+                    if (cpuUs > 0) {
+                        // 无 dimensions 时通常一行，即为全窗真实 p50（微秒 → 毫秒）
+                        cpuMs = cpuUs / 1000.0
+                    }
+                }
+            }
 
             val hourReq = linkedMapOf<String, Long>()
             val hourErr = linkedMapOf<String, Long>()
             val hourCpu = linkedMapOf<String, MutableList<Double>>()
-            var totalReq = 0L; var totalErr = 0L; var cpuSum = 0.0; var cpuCnt = 0
-
-            for (i in 0 until rows.length()) {
-                val row = rows.getJSONObject(i)
-                val sum = row.optJSONObject("sum"); val q = row.optJSONObject("quantiles"); val dim = row.optJSONObject("dimensions")
-                val reqs = sum?.optLong("requests") ?: 0L
-                val errs = sum?.optLong("errors") ?: 0L
-                val cpuUs = q?.optDouble("cpuTimeP50") ?: 0.0
-                totalReq += reqs; totalErr += errs
-                if (cpuUs > 0) { cpuSum += cpuUs / 1000.0; cpuCnt++ }
-                val dt = dim?.optString("datetime") ?: continue
-                val hourKey = bucketKey15m(dt)
-                hourReq[hourKey] = (hourReq[hourKey] ?: 0L) + reqs
-                hourErr[hourKey] = (hourErr[hourKey] ?: 0L) + errs
-                if (cpuUs > 0) hourCpu.getOrPut(hourKey) { mutableListOf() }.add(cpuUs / 1000.0)
+            if (series.ok) {
+                for (i in 0 until series.rows.length()) {
+                    val row = series.rows.getJSONObject(i)
+                    val sum = row.optJSONObject("sum")
+                    val q = row.optJSONObject("quantiles")
+                    val dim = row.optJSONObject("dimensions")
+                    val reqs = sum?.optLong("requests") ?: 0L
+                    val errs = sum?.optLong("errors") ?: 0L
+                    val cpuUs = q?.optDouble("cpuTimeP50") ?: 0.0
+                    if (!summary.ok) {
+                        totalReq += reqs
+                        totalErr += errs
+                    }
+                    val dt = dim?.optString("datetime") ?: continue
+                    val hourKey = bucketKey15m(dt)
+                    hourReq[hourKey] = (hourReq[hourKey] ?: 0L) + reqs
+                    hourErr[hourKey] = (hourErr[hourKey] ?: 0L) + errs
+                    if (cpuUs > 0) {
+                        hourCpu.getOrPut(hourKey) { mutableListOf() }.add(cpuUs / 1000.0)
+                    }
+                }
+            }
+            if (!summary.ok && series.ok && cpuMs == 0.0) {
+                val all = hourCpu.values.flatten()
+                if (all.isNotEmpty()) cpuMs = all.average()
             }
 
             val sortedKeys = hourReq.keys.sorted()
@@ -324,12 +404,13 @@ object CloudflareApi {
                 val list = hourCpu[k]
                 if (list.isNullOrEmpty()) 0f else list.average().toFloat()
             }
+
             ApiResult(
                 true,
                 WorkerMetrics(
                     totalRequests = totalReq,
                     totalErrors = totalErr,
-                    cpuTimeMs = if (cpuCnt > 0) cpuSum / cpuCnt else 0.0,
+                    cpuTimeMs = cpuMs,
                     requestPoints = requestPoints,
                     requestRatePoints = requestRatePoints,
                     cpuPoints = cpuPoints,
