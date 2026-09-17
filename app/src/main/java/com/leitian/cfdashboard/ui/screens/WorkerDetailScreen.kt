@@ -307,13 +307,13 @@ private fun MetricsTab(
             }
             Spacer(Modifier.height(8.dp))
             if (showBar) {
-                BarChart(values = metrics?.requestPoints ?: emptyList(), modifier = Modifier.fillMaxWidth().height(120.dp))
+                BarChart(values = metrics?.requestPoints ?: emptyList(), modifier = Modifier.fillMaxWidth().height(180.dp))
             } else {
                 AreaSparkline(
                     points = metrics?.requestRatePoints ?: emptyList(),
                     lineColor = CfColors.BarPurple,
                     fillColor = CfColors.BarPurple.copy(alpha = 0.18f),
-                    modifier = Modifier.fillMaxWidth().height(120.dp)
+                    modifier = Modifier.fillMaxWidth().height(180.dp)
                 )
             }
         }
