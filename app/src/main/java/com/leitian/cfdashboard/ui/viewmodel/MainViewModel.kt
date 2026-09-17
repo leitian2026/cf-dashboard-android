@@ -51,7 +51,6 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
     private val _createError = MutableStateFlow<String?>(null)
     val createError: StateFlow<String?> = _createError.asStateFlow()
 
-    // 详情 Tab 数据
     private val _deployments = MutableStateFlow<List<DeploymentItem>>(emptyList())
     val deployments: StateFlow<List<DeploymentItem>> = _deployments.asStateFlow()
     private val _deploymentsError = MutableStateFlow<String?>(null)
@@ -75,10 +74,8 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
     private val _tabLoading = MutableStateFlow(false)
     val tabLoading: StateFlow<Boolean> = _tabLoading.asStateFlow()
 
-    // 上传部署状态机：Idle → Selected → Loading → Success/Error
     sealed class UploadState {
         object Idle : UploadState()
-        /** 已选中文件，等待用户确认 */
         data class Selected(val uri: Uri, val fileName: String) : UploadState()
         object Loading : UploadState()
         data class Success(val message: String = "部署成功") : UploadState()
@@ -87,6 +84,36 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
 
     private val _uploadState = MutableStateFlow<UploadState>(UploadState.Idle)
     val uploadState: StateFlow<UploadState> = _uploadState.asStateFlow()
+
+    // 写操作状态（按功能拆分，避免弹窗互相覆盖）
+    private val _settingsWriteState = MutableStateFlow<WriteState>(WriteState.Idle)
+    val settingsWriteState: StateFlow<WriteState> = _settingsWriteState.asStateFlow()
+
+    private val _bindingsWriteState = MutableStateFlow<WriteState>(WriteState.Idle)
+    val bindingsWriteState: StateFlow<WriteState> = _bindingsWriteState.asStateFlow()
+
+    private val _domainsWriteState = MutableStateFlow<WriteState>(WriteState.Idle)
+    val domainsWriteState: StateFlow<WriteState> = _domainsWriteState.asStateFlow()
+
+    private val _schedulesWriteState = MutableStateFlow<WriteState>(WriteState.Idle)
+    val schedulesWriteState: StateFlow<WriteState> = _schedulesWriteState.asStateFlow()
+
+    private val _dangerWriteState = MutableStateFlow<WriteState>(WriteState.Idle)
+    val dangerWriteState: StateFlow<WriteState> = _dangerWriteState.asStateFlow()
+
+    fun clearSettingsWriteState() { _settingsWriteState.value = WriteState.Idle }
+    fun clearBindingsWriteState() { _bindingsWriteState.value = WriteState.Idle }
+    fun clearDomainsWriteState() { _domainsWriteState.value = WriteState.Idle }
+    fun clearSchedulesWriteState() { _schedulesWriteState.value = WriteState.Idle }
+    fun clearDangerWriteState() { _dangerWriteState.value = WriteState.Idle }
+
+    fun clearAllWriteStates() {
+        clearSettingsWriteState()
+        clearBindingsWriteState()
+        clearDomainsWriteState()
+        clearSchedulesWriteState()
+        clearDangerWriteState()
+    }
 
     private var email: String? = null
     private var apiKey: String? = null
@@ -176,7 +203,6 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
             val infoResult = CloudflareApi.getScriptInfo(e, k, a, scriptName)
             if (infoResult.success) _scriptInfo.value = infoResult.data
 
-            // 并行拉四个 Tab 数据
             val dep = CloudflareDetailApi.listDeployments(e, k, a, scriptName)
             if (dep.success) _deployments.value = dep.data ?: emptyList()
             else _deploymentsError.value = dep.error
@@ -211,6 +237,7 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
         _accessError.value = null
         _settingsError.value = null
         _uploadState.value = UploadState.Idle
+        clearAllWriteStates()
     }
 
     fun clearCreateError() { _createError.value = null }
@@ -239,10 +266,6 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
         }
     }
 
-    /**
-     * 用户选中文件后调用：只解析文件名，进入 Selected 状态，弹出确认对话框。
-     * 不立即上传。
-     */
     fun onScriptSelected(uri: Uri, context: Context) {
         var fileName = "worker.js"
         try {
@@ -253,8 +276,7 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
                     if (!name.isNullOrBlank()) fileName = name
                 }
             }
-        } catch (_: Exception) { /* 保持默认名 */ }
-        // App 层兜底：仅允许 .js（应对各厂商 MIME 识别不一致）
+        } catch (_: Exception) { }
         if (!fileName.endsWith(".js", ignoreCase = true) &&
             !fileName.endsWith(".mjs", ignoreCase = true)
         ) {
@@ -264,17 +286,11 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
         _uploadState.value = UploadState.Selected(uri, fileName)
     }
 
-    /**
-     * 用户在确认对话框点「确认」后调用：真正开始上传。
-     */
     fun confirmUploadScript(scriptName: String, context: Context) {
         val selected = _uploadState.value as? UploadState.Selected ?: return
         doUploadScript(scriptName, selected.uri, selected.fileName, context)
     }
 
-    /**
-     * 真正执行上传并部署 Worker 脚本
-     */
     private fun doUploadScript(
         scriptName: String,
         uri: Uri,
@@ -296,11 +312,9 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
                     _uploadState.value = UploadState.Error("无法读取文件或文件为空")
                     return@launch
                 }
-
                 val result = CloudflareApi.uploadWorkerScript(e, k, a, scriptName, fileName, bytes)
                 if (result.success) {
                     _uploadState.value = UploadState.Success("部署成功：$fileName")
-                    // 刷新详情（部署列表等）
                     loadDetail(scriptName)
                 } else {
                     _uploadState.value = UploadState.Error(result.error ?: "上传失败")
@@ -321,6 +335,7 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
             _apps.value = emptyList()
             _accountStats.value = null
             clearDetail()
+            clearAllWriteStates()
         }
     }
 }
