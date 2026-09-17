@@ -264,7 +264,7 @@ private fun BillingCard() {
 @Composable
 private fun PeriodStats(requests: String, cpu: String, errors: String, workersCount: String) {
     Column {
-        Text("最近 24 小时", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 8.dp))
+        Text("今日（UTC）", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 8.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             StatCard("请求", requests, Modifier.weight(1f))
             StatCard("CPU 时间", cpu, Modifier.weight(1f))
