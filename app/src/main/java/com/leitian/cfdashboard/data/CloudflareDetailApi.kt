@@ -7,15 +7,17 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.logging.HttpLoggingInterceptor
+import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
 /**
- * 详情页接口：部署 / 域 / Access / 设置（读 + 写）
+ * 详情页各 Tab 的真实接口：部署 / 域 / Access / 设置（读 + 写）
  */
 object CloudflareDetailApi {
 
     private const val BASE = "https://api.cloudflare.com/client/v4"
+    private val JSON = "application/json".toMediaType()
 
     private val client: OkHttpClient by lazy {
         val logging = HttpLoggingInterceptor().apply {
@@ -29,8 +31,6 @@ object CloudflareDetailApi {
     }
 
     data class ApiResult<T>(val success: Boolean, val data: T? = null, val error: String? = null)
-
-    private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
 
     private fun authGet(email: String, apiKey: String, url: String): Request {
         return Request.Builder()
@@ -48,7 +48,7 @@ object CloudflareDetailApi {
             .addHeader("X-Auth-Email", email)
             .addHeader("X-Auth-Key", apiKey)
             .addHeader("Content-Type", "application/json")
-            .patch(jsonBody.toRequestBody(JSON_MEDIA))
+            .patch(jsonBody.toRequestBody(JSON))
             .build()
     }
 
@@ -58,7 +58,7 @@ object CloudflareDetailApi {
             .addHeader("X-Auth-Email", email)
             .addHeader("X-Auth-Key", apiKey)
             .addHeader("Content-Type", "application/json")
-            .put(jsonBody.toRequestBody(JSON_MEDIA))
+            .put(jsonBody.toRequestBody(JSON))
             .build()
     }
 
@@ -68,7 +68,7 @@ object CloudflareDetailApi {
             .addHeader("X-Auth-Email", email)
             .addHeader("X-Auth-Key", apiKey)
             .addHeader("Content-Type", "application/json")
-            .post(jsonBody.toRequestBody(JSON_MEDIA))
+            .post(jsonBody.toRequestBody(JSON))
             .build()
     }
 
@@ -82,39 +82,23 @@ object CloudflareDetailApi {
             .build()
     }
 
-    private fun parseCfError(json: JSONObject, fallback: String = "请求失败"): String {
-        val arr = json.optJSONArray("errors")
-        if (arr != null && arr.length() > 0) {
-            val msg = arr.optJSONObject(0)?.optString("message").orEmpty()
-            if (msg.isNotBlank()) return msg
-        }
-        val messages = json.optJSONArray("messages")
-        if (messages != null && messages.length() > 0) {
-            val msg = messages.optJSONObject(0)?.optString("message").orEmpty()
-            if (msg.isNotBlank()) return msg
-        }
-        return fallback
-    }
-
-    private fun executeWrite(req: Request, httpFailPrefix: String): ApiResult<Unit> {
-        val resp = client.newCall(req).execute()
-        val body = resp.body?.string() ?: ""
-        if (body.isBlank() && resp.isSuccessful) {
-            return ApiResult(true, Unit)
-        }
-        val json = try {
-            if (body.isBlank()) JSONObject() else JSONObject(body)
+    private fun parseCfError(body: String, fallback: String = "请求失败"): String {
+        return try {
+            val json = JSONObject(body)
+            val arr = json.optJSONArray("errors")
+            if (arr != null && arr.length() > 0) {
+                val msg = arr.optJSONObject(0)?.optString("message").orEmpty()
+                if (msg.isNotBlank()) return msg
+            }
+            val messages = json.optJSONArray("messages")
+            if (messages != null && messages.length() > 0) {
+                val msg = messages.optJSONObject(0)?.optString("message").orEmpty()
+                if (msg.isNotBlank()) return msg
+            }
+            fallback
         } catch (_: Exception) {
-            return if (resp.isSuccessful) ApiResult(true, Unit)
-            else ApiResult(false, error = "$httpFailPrefix (${resp.code})")
+            fallback
         }
-        if (!resp.isSuccessful) {
-            return ApiResult(false, error = parseCfError(json, "$httpFailPrefix (${resp.code})"))
-        }
-        if (!json.optBoolean("success", true) && json.has("success")) {
-            return ApiResult(false, error = parseCfError(json, httpFailPrefix))
-        }
-        return ApiResult(true, Unit)
     }
 
     suspend fun listDeployments(
@@ -131,14 +115,13 @@ object CloudflareDetailApi {
             val resp = client.newCall(req).execute()
             val body = resp.body?.string() ?: ""
             if (!resp.isSuccessful) {
-                return@withContext ApiResult(false, error = "部署列表失败 (${resp.code})")
+                return@withContext ApiResult(false, error = "部署列表失败 (${resp.code})：${parseCfError(body)}")
             }
             val json = JSONObject(body)
             if (!json.optBoolean("success", false)) {
-                return@withContext ApiResult(false, error = parseCfError(json))
+                return@withContext ApiResult(false, error = parseCfError(body))
             }
-            val arr = json.optJSONObject("result")?.optJSONArray("deployments")
-                ?: org.json.JSONArray()
+            val arr = json.optJSONObject("result")?.optJSONArray("deployments") ?: JSONArray()
             val list = mutableListOf<DeploymentItem>()
             for (i in 0 until arr.length()) {
                 val o = arr.getJSONObject(i)
@@ -180,13 +163,13 @@ object CloudflareDetailApi {
                 if (resp.code == 403 || resp.code == 404) {
                     return@withContext ApiResult(true, emptyList())
                 }
-                return@withContext ApiResult(false, error = "域名列表失败 (${resp.code})")
+                return@withContext ApiResult(false, error = "域名列表失败 (${resp.code})：${parseCfError(body)}")
             }
             val json = JSONObject(body)
             if (!json.optBoolean("success", false)) {
                 return@withContext ApiResult(true, emptyList())
             }
-            val arr = json.optJSONArray("result") ?: org.json.JSONArray()
+            val arr = json.optJSONArray("result") ?: JSONArray()
             val list = mutableListOf<DomainItem>()
             for (i in 0 until arr.length()) {
                 val o = arr.getJSONObject(i)
@@ -232,13 +215,13 @@ object CloudflareDetailApi {
                 if (resp.code == 403 || resp.code == 404) {
                     return@withContext ApiResult(true, emptyList())
                 }
-                return@withContext ApiResult(false, error = "Access 列表失败 (${resp.code})")
+                return@withContext ApiResult(false, error = "Access 列表失败 (${resp.code})：${parseCfError(body)}")
             }
             val json = JSONObject(body)
             if (!json.optBoolean("success", false)) {
                 return@withContext ApiResult(true, emptyList())
             }
-            val arr = json.optJSONArray("result") ?: org.json.JSONArray()
+            val arr = json.optJSONArray("result") ?: JSONArray()
             val list = mutableListOf<AccessAppItem>()
             for (i in 0 until arr.length()) {
                 val o = arr.getJSONObject(i)
@@ -274,15 +257,15 @@ object CloudflareDetailApi {
             val resp = client.newCall(req).execute()
             val body = resp.body?.string() ?: ""
             if (!resp.isSuccessful) {
-                return@withContext ApiResult(false, error = "设置读取失败 (${resp.code})")
+                return@withContext ApiResult(false, error = "设置读取失败 (${resp.code})：${parseCfError(body)}")
             }
             val json = JSONObject(body)
             if (!json.optBoolean("success", false)) {
-                return@withContext ApiResult(false, error = parseCfError(json))
+                return@withContext ApiResult(false, error = parseCfError(body))
             }
             val result = json.optJSONObject("result") ?: JSONObject()
 
-            val bindingsArr = result.optJSONArray("bindings") ?: org.json.JSONArray()
+            val bindingsArr = result.optJSONArray("bindings") ?: JSONArray()
             val bindings = mutableListOf<BindingItem>()
             for (i in 0 until bindingsArr.length()) {
                 val b = bindingsArr.getJSONObject(i)
@@ -299,12 +282,13 @@ object CloudflareDetailApi {
                     BindingItem(
                         name = b.optString("name"),
                         type = type,
-                        detail = detail
+                        detail = detail,
+                        rawJson = b.toString()
                     )
                 )
             }
 
-            val tagsArr = result.optJSONArray("tags") ?: org.json.JSONArray()
+            val tagsArr = result.optJSONArray("tags") ?: JSONArray()
             val tags = mutableListOf<String>()
             for (i in 0 until tagsArr.length()) {
                 tags.add(tagsArr.getString(i))
@@ -312,15 +296,27 @@ object CloudflareDetailApi {
 
             val placement = result.optJSONObject("placement")?.optString("mode") ?: "—"
             val logpush = result.optBoolean("logpush", false)
+            val observability = result.optJSONObject("observability")
+            val observabilityEnabled = observability?.optBoolean("enabled", false) ?: false
+            val headSamplingRate = observability?.optJSONObject("head_sampling_rate")?.optDouble("value", 1.0) ?: 1.0
+
+            val flagsArr = result.optJSONArray("compatibility_flags") ?: JSONArray()
+            val flags = mutableListOf<String>()
+            for (i in 0 until flagsArr.length()) {
+                flags.add(flagsArr.getString(i))
+            }
 
             ApiResult(
                 true,
                 WorkerSettingsDetail(
                     compatibilityDate = result.optString("compatibility_date", "—"),
+                    compatibilityFlags = flags,
                     usageModel = result.optString("usage_model", "standard"),
                     bindings = bindings,
                     tags = tags,
                     logpush = logpush,
+                    observabilityEnabled = observabilityEnabled,
+                    headSamplingRate = headSamplingRate,
                     placementMode = placement
                 )
             )
@@ -342,7 +338,12 @@ object CloudflareDetailApi {
                 "$BASE/accounts/$accountId/workers/scripts/$scriptName/settings",
                 settingsJsonBody
             )
-            executeWrite(req, "更新设置失败")
+            val resp = client.newCall(req).execute()
+            val body = resp.body?.string() ?: ""
+            if (!resp.isSuccessful) return@withContext ApiResult(false, error = "更新设置失败 (${resp.code})：${parseCfError(body)}")
+            val json = JSONObject(body)
+            if (!json.optBoolean("success", false)) return@withContext ApiResult(false, error = parseCfError(body))
+            ApiResult(true, Unit)
         } catch (e: Exception) {
             ApiResult(false, error = e.message ?: "网络错误")
         }
@@ -359,26 +360,65 @@ object CloudflareDetailApi {
                 email, apiKey,
                 "$BASE/accounts/$accountId/workers/scripts/$scriptName"
             )
-            executeWrite(req, "删除 Worker 失败")
+            val resp = client.newCall(req).execute()
+            val body = resp.body?.string() ?: ""
+            if (!resp.isSuccessful) return@withContext ApiResult(false, error = "删除失败 (${resp.code})：${parseCfError(body)}")
+            val json = JSONObject(body)
+            if (!json.optBoolean("success", false)) return@withContext ApiResult(false, error = parseCfError(body))
+            ApiResult(true, Unit)
         } catch (e: Exception) {
             ApiResult(false, error = e.message ?: "网络错误")
         }
     }
 
-    suspend fun putSchedules(
+    /** 拉取 Cron 触发器列表 */
+    suspend fun listSchedules(
+        email: String,
+        apiKey: String,
+        accountId: String,
+        scriptName: String
+    ): ApiResult<List<String>> = withContext(Dispatchers.IO) {
+        try {
+            val req = authGet(email, apiKey, "$BASE/accounts/$accountId/workers/scripts/$scriptName/schedules")
+            val resp = client.newCall(req).execute()
+            val body = resp.body?.string() ?: ""
+            if (!resp.isSuccessful) return@withContext ApiResult(true, emptyList()) // 无 cron 时 CF 也可能返回非 200，静默按空处理
+            val json = JSONObject(body)
+            val arr = json.optJSONObject("result")?.optJSONArray("schedules") ?: JSONArray()
+            val list = mutableListOf<String>()
+            for (i in 0 until arr.length()) {
+                list.add(arr.getJSONObject(i).optString("cron"))
+            }
+            ApiResult(true, list)
+        } catch (e: Exception) {
+            ApiResult(false, error = e.message ?: "网络错误")
+        }
+    }
+
+    /**
+     * 覆盖式更新 Cron 触发器列表（整体提交，传入改动后的完整列表）
+     */
+    suspend fun updateSchedules(
         email: String,
         apiKey: String,
         accountId: String,
         scriptName: String,
-        schedulesJsonArray: String
+        crons: List<String>
     ): ApiResult<Unit> = withContext(Dispatchers.IO) {
         try {
+            val arr = JSONArray()
+            crons.forEach { arr.put(JSONObject().put("cron", it)) }
             val req = authPut(
                 email, apiKey,
                 "$BASE/accounts/$accountId/workers/scripts/$scriptName/schedules",
-                schedulesJsonArray
+                arr.toString()
             )
-            executeWrite(req, "更新触发器失败")
+            val resp = client.newCall(req).execute()
+            val body = resp.body?.string() ?: ""
+            if (!resp.isSuccessful) return@withContext ApiResult(false, error = "保存失败 (${resp.code})：${parseCfError(body)}")
+            val json = JSONObject(body)
+            if (!json.optBoolean("success", false)) return@withContext ApiResult(false, error = parseCfError(body))
+            ApiResult(true, Unit)
         } catch (e: Exception) {
             ApiResult(false, error = e.message ?: "网络错误")
         }
