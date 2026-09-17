@@ -94,6 +94,38 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
     private val _cronTriggers = MutableStateFlow<List<String>>(emptyList())
     val cronTriggers: StateFlow<List<String>> = _cronTriggers.asStateFlow()
 
+    // ---- 绑定 Tab 写操作 + 资源选择器数据 ----
+    private val _bindingWriteState = MutableStateFlow<WriteState>(WriteState.Idle)
+    val bindingWriteState: StateFlow<WriteState> = _bindingWriteState.asStateFlow()
+
+    private val _kvNamespaces = MutableStateFlow<List<com.leitian.cfdashboard.data.KvNamespaceItem>>(emptyList())
+    val kvNamespaces: StateFlow<List<com.leitian.cfdashboard.data.KvNamespaceItem>> = _kvNamespaces.asStateFlow()
+    private val _r2Buckets = MutableStateFlow<List<com.leitian.cfdashboard.data.R2BucketItem>>(emptyList())
+    val r2Buckets: StateFlow<List<com.leitian.cfdashboard.data.R2BucketItem>> = _r2Buckets.asStateFlow()
+    private val _d1Databases = MutableStateFlow<List<com.leitian.cfdashboard.data.D1DatabaseItem>>(emptyList())
+    val d1Databases: StateFlow<List<com.leitian.cfdashboard.data.D1DatabaseItem>> = _d1Databases.asStateFlow()
+
+    // ---- 域 Tab 写操作 + Zone 选择器 ----
+    private val _domainWriteState = MutableStateFlow<WriteState>(WriteState.Idle)
+    val domainWriteState: StateFlow<WriteState> = _domainWriteState.asStateFlow()
+    private val _zones = MutableStateFlow<List<com.leitian.cfdashboard.data.ZoneItem>>(emptyList())
+    val zones: StateFlow<List<com.leitian.cfdashboard.data.ZoneItem>> = _zones.asStateFlow()
+
+    // ---- 触发事件：Queues / 邮件路由 ----
+    private val _queueWriteState = MutableStateFlow<WriteState>(WriteState.Idle)
+    val queueWriteState: StateFlow<WriteState> = _queueWriteState.asStateFlow()
+    private val _queues = MutableStateFlow<List<com.leitian.cfdashboard.data.QueueItem>>(emptyList())
+    val queues: StateFlow<List<com.leitian.cfdashboard.data.QueueItem>> = _queues.asStateFlow()
+
+    private val _emailWriteState = MutableStateFlow<WriteState>(WriteState.Idle)
+    val emailWriteState: StateFlow<WriteState> = _emailWriteState.asStateFlow()
+    private val _emailRules = MutableStateFlow<List<com.leitian.cfdashboard.data.EmailRoutingRuleItem>>(emptyList())
+    val emailRules: StateFlow<List<com.leitian.cfdashboard.data.EmailRoutingRuleItem>> = _emailRules.asStateFlow()
+
+    // ---- 部署回滚 ----
+    private val _deploymentWriteState = MutableStateFlow<WriteState>(WriteState.Idle)
+    val deploymentWriteState: StateFlow<WriteState> = _deploymentWriteState.asStateFlow()
+
     // 上传部署状态机：Idle → Selected → Loading → Success/Error
     sealed class UploadState {
         object Idle : UploadState()
@@ -251,6 +283,17 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
         _runtimeWriteState.value = WriteState.Idle
         _cronWriteState.value = WriteState.Idle
         _deleteWorkerState.value = WriteState.Idle
+        _bindingWriteState.value = WriteState.Idle
+        _domainWriteState.value = WriteState.Idle
+        _queueWriteState.value = WriteState.Idle
+        _emailWriteState.value = WriteState.Idle
+        _deploymentWriteState.value = WriteState.Idle
+        _kvNamespaces.value = emptyList()
+        _r2Buckets.value = emptyList()
+        _d1Databases.value = emptyList()
+        _zones.value = emptyList()
+        _queues.value = emptyList()
+        _emailRules.value = emptyList()
     }
 
     fun clearVariableWriteState() { _variableWriteState.value = WriteState.Idle }
@@ -258,6 +301,227 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
     fun clearRuntimeWriteState() { _runtimeWriteState.value = WriteState.Idle }
     fun clearCronWriteState() { _cronWriteState.value = WriteState.Idle }
     fun clearDeleteWorkerState() { _deleteWorkerState.value = WriteState.Idle }
+    fun clearBindingWriteState() { _bindingWriteState.value = WriteState.Idle }
+    fun clearDomainWriteState() { _domainWriteState.value = WriteState.Idle }
+    fun clearQueueWriteState() { _queueWriteState.value = WriteState.Idle }
+    fun clearEmailWriteState() { _emailWriteState.value = WriteState.Idle }
+    fun clearDeploymentWriteState() { _deploymentWriteState.value = WriteState.Idle }
+
+    // ---------------------------------------------------------------------
+    // 绑定 Tab：资源选择器数据 + 新增/删除
+    // ---------------------------------------------------------------------
+
+    fun loadKvNamespaces() {
+        val e = email; val k = apiKey; val a = accountId ?: return
+        if (e == null || k == null) return
+        viewModelScope.launch {
+            val r = CloudflareDetailApi.listKvNamespaces(e, k, a)
+            if (r.success) _kvNamespaces.value = r.data ?: emptyList()
+        }
+    }
+
+    fun loadR2Buckets() {
+        val e = email; val k = apiKey; val a = accountId ?: return
+        if (e == null || k == null) return
+        viewModelScope.launch {
+            val r = CloudflareDetailApi.listR2Buckets(e, k, a)
+            if (r.success) _r2Buckets.value = r.data ?: emptyList()
+        }
+    }
+
+    fun loadD1Databases() {
+        val e = email; val k = apiKey; val a = accountId ?: return
+        if (e == null || k == null) return
+        viewModelScope.launch {
+            val r = CloudflareDetailApi.listD1Databases(e, k, a)
+            if (r.success) _d1Databases.value = r.data ?: emptyList()
+        }
+    }
+
+    /** 新增一个资源绑定（KV / R2 / D1 / Service） */
+    fun addResourceBinding(scriptName: String, bindingName: String, type: String, resourceIdOrName: String) {
+        val e = email; val k = apiKey; val a = accountId
+        if (e == null || k == null || a == null) { _bindingWriteState.value = WriteState.Error("未登录"); return }
+        if (bindingName.isBlank()) { _bindingWriteState.value = WriteState.Error("绑定名称不能为空"); return }
+        val current = _settingsDetail.value?.bindings.orEmpty()
+        viewModelScope.launch {
+            _bindingWriteState.value = WriteState.Loading
+            val result = CloudflareDetailApi.addResourceBinding(e, k, a, scriptName, current, bindingName, type, resourceIdOrName)
+            if (result.success) {
+                _bindingWriteState.value = WriteState.Success("已添加绑定")
+                refreshSettings(scriptName)
+            } else {
+                _bindingWriteState.value = WriteState.Error(result.error ?: "添加失败")
+            }
+        }
+    }
+
+    /** 删除任意类型的绑定（变量/密钥/KV/R2/D1/Service 通用，按名称删） */
+    fun deleteResourceBinding(scriptName: String, name: String) {
+        val e = email; val k = apiKey; val a = accountId
+        if (e == null || k == null || a == null) { _bindingWriteState.value = WriteState.Error("未登录"); return }
+        val current = _settingsDetail.value?.bindings.orEmpty()
+        viewModelScope.launch {
+            _bindingWriteState.value = WriteState.Loading
+            val result = CloudflareDetailApi.deleteBinding(e, k, a, scriptName, current, name)
+            if (result.success) {
+                _bindingWriteState.value = WriteState.Success("已删除")
+                refreshSettings(scriptName)
+            } else {
+                _bindingWriteState.value = WriteState.Error(result.error ?: "删除失败")
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // 域 Tab：Zone 选择器 + 自定义域名新增/删除
+    // ---------------------------------------------------------------------
+
+    fun loadZones() {
+        val e = email; val k = apiKey; val a = accountId ?: return
+        if (e == null || k == null) return
+        viewModelScope.launch {
+            val r = CloudflareDetailApi.listZones(e, k, a)
+            if (r.success) _zones.value = r.data ?: emptyList()
+        }
+    }
+
+    fun addCustomDomain(scriptName: String, hostname: String, zoneId: String) {
+        val e = email; val k = apiKey; val a = accountId
+        if (e == null || k == null || a == null) { _domainWriteState.value = WriteState.Error("未登录"); return }
+        if (hostname.isBlank() || zoneId.isBlank()) { _domainWriteState.value = WriteState.Error("请填写主机名并选择 Zone"); return }
+        viewModelScope.launch {
+            _domainWriteState.value = WriteState.Loading
+            val result = CloudflareDetailApi.addCustomDomain(e, k, a, scriptName, hostname, zoneId)
+            if (result.success) {
+                _domainWriteState.value = WriteState.Success("已添加域名")
+                loadDetail(scriptName)
+            } else {
+                _domainWriteState.value = WriteState.Error(result.error ?: "添加失败")
+            }
+        }
+    }
+
+    fun deleteCustomDomain(scriptName: String, domainId: String) {
+        val e = email; val k = apiKey; val a = accountId
+        if (e == null || k == null || a == null) { _domainWriteState.value = WriteState.Error("未登录"); return }
+        viewModelScope.launch {
+            _domainWriteState.value = WriteState.Loading
+            val result = CloudflareDetailApi.deleteCustomDomain(e, k, a, domainId)
+            if (result.success) {
+                _domainWriteState.value = WriteState.Success("已删除")
+                loadDetail(scriptName)
+            } else {
+                _domainWriteState.value = WriteState.Error(result.error ?: "删除失败")
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // 触发事件：Queues 消费者
+    // ---------------------------------------------------------------------
+
+    fun loadQueues(scriptName: String) {
+        val e = email; val k = apiKey; val a = accountId ?: return
+        if (e == null || k == null) return
+        viewModelScope.launch {
+            val r = CloudflareDetailApi.listQueues(e, k, a, scriptName)
+            if (r.success) _queues.value = r.data ?: emptyList()
+        }
+    }
+
+    fun addQueueConsumer(scriptName: String, queueId: String) {
+        val e = email; val k = apiKey; val a = accountId
+        if (e == null || k == null || a == null) { _queueWriteState.value = WriteState.Error("未登录"); return }
+        viewModelScope.launch {
+            _queueWriteState.value = WriteState.Loading
+            val result = CloudflareDetailApi.addQueueConsumer(e, k, a, scriptName, queueId)
+            if (result.success) {
+                _queueWriteState.value = WriteState.Success("已添加")
+                loadQueues(scriptName)
+            } else {
+                _queueWriteState.value = WriteState.Error(result.error ?: "添加失败")
+            }
+        }
+    }
+
+    fun deleteQueueConsumer(scriptName: String, queueId: String, consumerId: String) {
+        val e = email; val k = apiKey; val a = accountId
+        if (e == null || k == null || a == null) { _queueWriteState.value = WriteState.Error("未登录"); return }
+        viewModelScope.launch {
+            _queueWriteState.value = WriteState.Loading
+            val result = CloudflareDetailApi.deleteQueueConsumer(e, k, a, queueId, consumerId)
+            if (result.success) {
+                _queueWriteState.value = WriteState.Success("已删除")
+                loadQueues(scriptName)
+            } else {
+                _queueWriteState.value = WriteState.Error(result.error ?: "删除失败")
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // 触发事件：邮件路由规则
+    // ---------------------------------------------------------------------
+
+    fun loadEmailRules(scriptName: String, zoneId: String) {
+        val e = email; val k = apiKey
+        if (e == null || k == null) return
+        viewModelScope.launch {
+            val r = CloudflareDetailApi.listEmailRoutingRules(e, k, zoneId, scriptName)
+            if (r.success) _emailRules.value = r.data ?: emptyList()
+        }
+    }
+
+    fun addEmailRule(scriptName: String, zoneId: String, matchAddress: String) {
+        val e = email; val k = apiKey
+        if (e == null || k == null) { _emailWriteState.value = WriteState.Error("未登录"); return }
+        if (matchAddress.isBlank() || zoneId.isBlank()) { _emailWriteState.value = WriteState.Error("请填写邮箱地址并选择 Zone"); return }
+        viewModelScope.launch {
+            _emailWriteState.value = WriteState.Loading
+            val result = CloudflareDetailApi.addEmailRoutingRule(e, k, zoneId, scriptName, matchAddress)
+            if (result.success) {
+                _emailWriteState.value = WriteState.Success("已添加")
+                loadEmailRules(scriptName, zoneId)
+            } else {
+                _emailWriteState.value = WriteState.Error(result.error ?: "添加失败")
+            }
+        }
+    }
+
+    fun deleteEmailRule(scriptName: String, zoneId: String, ruleId: String) {
+        val e = email; val k = apiKey
+        if (e == null || k == null) { _emailWriteState.value = WriteState.Error("未登录"); return }
+        viewModelScope.launch {
+            _emailWriteState.value = WriteState.Loading
+            val result = CloudflareDetailApi.deleteEmailRoutingRule(e, k, zoneId, ruleId)
+            if (result.success) {
+                _emailWriteState.value = WriteState.Success("已删除")
+                loadEmailRules(scriptName, zoneId)
+            } else {
+                _emailWriteState.value = WriteState.Error(result.error ?: "删除失败")
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // 部署：回滚
+    // ---------------------------------------------------------------------
+
+    fun rollbackDeployment(scriptName: String, versionId: String) {
+        val e = email; val k = apiKey; val a = accountId
+        if (e == null || k == null || a == null) { _deploymentWriteState.value = WriteState.Error("未登录"); return }
+        viewModelScope.launch {
+            _deploymentWriteState.value = WriteState.Loading
+            val result = CloudflareDetailApi.rollbackDeployment(e, k, a, scriptName, versionId)
+            if (result.success) {
+                _deploymentWriteState.value = WriteState.Success("已回滚")
+                loadDetail(scriptName)
+            } else {
+                _deploymentWriteState.value = WriteState.Error(result.error ?: "回滚失败")
+            }
+        }
+    }
 
     /** 新增或编辑一个 Runtime Variable / Secret */
     fun upsertVariable(
