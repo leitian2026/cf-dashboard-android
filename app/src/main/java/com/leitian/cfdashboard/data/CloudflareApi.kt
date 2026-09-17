@@ -150,7 +150,6 @@ object CloudflareApi {
             }
         }
 
-    /** 账号级 workers.dev 前缀，失败时返回 null（列表仍可用，只是域名近似值） */
     private fun fetchWorkersSubdomainPrefix(email: String, apiKey: String, accountId: String): String? {
         return try {
             val resp = client.newCall(authGet(email, apiKey, "$BASE/accounts/$accountId/workers/subdomain")).execute()
@@ -200,9 +199,7 @@ object CloudflareApi {
                     for (i in 0 until arr.length()) {
                         val o = arr.getJSONObject(i)
                         val name = o.optString("name")
-                        val subdomain = o.optString("subdomain").ifBlank {
-                            "$name.pages.dev"
-                        }
+                        val subdomain = o.optString("subdomain").ifBlank { "$name.pages.dev" }
                         list.add(
                             AppItem(
                                 id = o.optString("id", name),
@@ -228,13 +225,19 @@ object CloudflareApi {
                 if (!scriptName.matches(Regex("^[a-zA-Z0-9_-]+$"))) {
                     return@withContext ApiResult(false, error = "名称只能包含字母、数字、下划线和短横线")
                 }
+                // ES Module：脚本 part 用 application/javascript+module；metadata 用 application/json
+                // 否则 CF 按旧式 Service Worker 解析，顶层 export 会报 Unexpected token 'export'
                 val defaultScript = "export default {\n  async fetch(request, env, ctx) {\n    return new Response('Hello from $scriptName!');\n  }\n}\n"
                 val metadataJson = """{"main_module":"worker.js","compatibility_date":"2024-01-01"}"""
                 val body = MultipartBody.Builder().setType(MultipartBody.FORM)
-                    .addFormDataPart("worker.js", "worker.js", defaultScript.toRequestBody("application/javascript".toMediaType()))
+                    .addFormDataPart(
+                        "worker.js",
+                        "worker.js",
+                        defaultScript.toRequestBody("application/javascript+module".toMediaType())
+                    )
                     .addFormDataPart(
                         "metadata",
-                        null,
+                        "metadata.json",
                         metadataJson.toRequestBody("application/json".toMediaType())
                     )
                     .build()
@@ -263,10 +266,14 @@ object CloudflareApi {
             }
             val metadataJson = """{"main_module":"$moduleName","compatibility_date":"2024-01-01"}"""
             val body = MultipartBody.Builder().setType(MultipartBody.FORM)
-                .addFormDataPart(moduleName, moduleName, bytes.toRequestBody("application/javascript".toMediaType()))
+                .addFormDataPart(
+                    moduleName,
+                    moduleName,
+                    bytes.toRequestBody("application/javascript+module".toMediaType())
+                )
                 .addFormDataPart(
                     "metadata",
-                    null,
+                    "metadata.json",
                     metadataJson.toRequestBody("application/json".toMediaType())
                 )
                 .build()
@@ -468,7 +475,6 @@ object CloudflareApi {
         }
     }
 
-    /** Pages 项目详情：读取 subdomain / domains，供详情页概述使用 */
     suspend fun getPagesProject(
         email: String, apiKey: String, accountId: String, projectName: String
     ): ApiResult<ScriptInfo> = withContext(Dispatchers.IO) {
