@@ -33,7 +33,7 @@ fun LoginScreen(
     val isLoggedIn by viewModel.isLoggedIn.collectAsState()
 
     LaunchedEffect(isLoggedIn) {
-        if (isLoggedIn) onLoginSuccess()
+        if (isLoggedIn == true) onLoginSuccess()
     }
 
     Column(
