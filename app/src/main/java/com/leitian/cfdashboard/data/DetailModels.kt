@@ -26,15 +26,21 @@ data class AccessAppItem(
 
 data class WorkerSettingsDetail(
     val compatibilityDate: String,
+    val compatibilityFlags: List<String> = emptyList(),
     val usageModel: String,
     val bindings: List<BindingItem>,
     val tags: List<String>,
     val logpush: Boolean,
-    val placementMode: String
+    val observabilityEnabled: Boolean = false,
+    val headSamplingRate: Double = 1.0,
+    val placementMode: String,
+    val cronTriggers: List<String> = emptyList()
 )
 
 data class BindingItem(
     val name: String,
     val type: String,
-    val detail: String
+    val detail: String,
+    /** 原始 JSON（未做任何转换），用于"整体覆盖"式提交时把没改动的绑定原样带回去 */
+    val rawJson: String = "{}"
 )
