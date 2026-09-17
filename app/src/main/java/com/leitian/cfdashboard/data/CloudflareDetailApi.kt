@@ -2,14 +2,16 @@ package com.leitian.cfdashboard.data
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.logging.HttpLoggingInterceptor
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
 /**
- * 详情页四个 Tab 的真实接口：部署 / 域 / Access / 设置
+ * 详情页接口：部署 / 域 / Access / 设置（读 + 写）
  */
 object CloudflareDetailApi {
 
@@ -28,6 +30,8 @@ object CloudflareDetailApi {
 
     data class ApiResult<T>(val success: Boolean, val data: T? = null, val error: String? = null)
 
+    private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
+
     private fun authGet(email: String, apiKey: String, url: String): Request {
         return Request.Builder()
             .url(url)
@@ -38,7 +42,81 @@ object CloudflareDetailApi {
             .build()
     }
 
-    /** 部署列表 */
+    private fun authPatch(email: String, apiKey: String, url: String, jsonBody: String): Request {
+        return Request.Builder()
+            .url(url)
+            .addHeader("X-Auth-Email", email)
+            .addHeader("X-Auth-Key", apiKey)
+            .addHeader("Content-Type", "application/json")
+            .patch(jsonBody.toRequestBody(JSON_MEDIA))
+            .build()
+    }
+
+    private fun authPut(email: String, apiKey: String, url: String, jsonBody: String): Request {
+        return Request.Builder()
+            .url(url)
+            .addHeader("X-Auth-Email", email)
+            .addHeader("X-Auth-Key", apiKey)
+            .addHeader("Content-Type", "application/json")
+            .put(jsonBody.toRequestBody(JSON_MEDIA))
+            .build()
+    }
+
+    private fun authPost(email: String, apiKey: String, url: String, jsonBody: String): Request {
+        return Request.Builder()
+            .url(url)
+            .addHeader("X-Auth-Email", email)
+            .addHeader("X-Auth-Key", apiKey)
+            .addHeader("Content-Type", "application/json")
+            .post(jsonBody.toRequestBody(JSON_MEDIA))
+            .build()
+    }
+
+    private fun authDelete(email: String, apiKey: String, url: String): Request {
+        return Request.Builder()
+            .url(url)
+            .addHeader("X-Auth-Email", email)
+            .addHeader("X-Auth-Key", apiKey)
+            .addHeader("Content-Type", "application/json")
+            .delete()
+            .build()
+    }
+
+    private fun parseCfError(json: JSONObject, fallback: String = "请求失败"): String {
+        val arr = json.optJSONArray("errors")
+        if (arr != null && arr.length() > 0) {
+            val msg = arr.optJSONObject(0)?.optString("message").orEmpty()
+            if (msg.isNotBlank()) return msg
+        }
+        val messages = json.optJSONArray("messages")
+        if (messages != null && messages.length() > 0) {
+            val msg = messages.optJSONObject(0)?.optString("message").orEmpty()
+            if (msg.isNotBlank()) return msg
+        }
+        return fallback
+    }
+
+    private fun executeWrite(req: Request, httpFailPrefix: String): ApiResult<Unit> {
+        val resp = client.newCall(req).execute()
+        val body = resp.body?.string() ?: ""
+        if (body.isBlank() && resp.isSuccessful) {
+            return ApiResult(true, Unit)
+        }
+        val json = try {
+            if (body.isBlank()) JSONObject() else JSONObject(body)
+        } catch (_: Exception) {
+            return if (resp.isSuccessful) ApiResult(true, Unit)
+            else ApiResult(false, error = "$httpFailPrefix (${resp.code})")
+        }
+        if (!resp.isSuccessful) {
+            return ApiResult(false, error = parseCfError(json, "$httpFailPrefix (${resp.code})"))
+        }
+        if (!json.optBoolean("success", true) && json.has("success")) {
+            return ApiResult(false, error = parseCfError(json, httpFailPrefix))
+        }
+        return ApiResult(true, Unit)
+    }
+
     suspend fun listDeployments(
         email: String,
         apiKey: String,
@@ -57,8 +135,7 @@ object CloudflareDetailApi {
             }
             val json = JSONObject(body)
             if (!json.optBoolean("success", false)) {
-                val msg = json.optJSONArray("errors")?.optJSONObject(0)?.optString("message") ?: "失败"
-                return@withContext ApiResult(false, error = msg)
+                return@withContext ApiResult(false, error = parseCfError(json))
             }
             val arr = json.optJSONObject("result")?.optJSONArray("deployments")
                 ?: org.json.JSONArray()
@@ -86,7 +163,6 @@ object CloudflareDetailApi {
         }
     }
 
-    /** Workers 自定义域名（按 service 过滤） */
     suspend fun listDomains(
         email: String,
         apiKey: String,
@@ -101,7 +177,6 @@ object CloudflareDetailApi {
             val resp = client.newCall(req).execute()
             val body = resp.body?.string() ?: ""
             if (!resp.isSuccessful) {
-                // 无权限时返回空列表而不是硬失败
                 if (resp.code == 403 || resp.code == 404) {
                     return@withContext ApiResult(true, emptyList())
                 }
@@ -124,7 +199,6 @@ object CloudflareDetailApi {
                     )
                 )
             }
-            // 始终带上 workers.dev 子域名
             if (list.none { it.hostname.endsWith(".workers.dev") }) {
                 list.add(
                     0,
@@ -142,7 +216,6 @@ object CloudflareDetailApi {
         }
     }
 
-    /** Access Applications（账号级列表，可能与当前 Worker 无直接关联） */
     suspend fun listAccessApps(
         email: String,
         apiKey: String,
@@ -187,7 +260,6 @@ object CloudflareDetailApi {
         }
     }
 
-    /** Worker 设置详情 */
     suspend fun getSettingsDetail(
         email: String,
         apiKey: String,
@@ -206,8 +278,7 @@ object CloudflareDetailApi {
             }
             val json = JSONObject(body)
             if (!json.optBoolean("success", false)) {
-                val msg = json.optJSONArray("errors")?.optJSONObject(0)?.optString("message") ?: "失败"
-                return@withContext ApiResult(false, error = msg)
+                return@withContext ApiResult(false, error = parseCfError(json))
             }
             val result = json.optJSONObject("result") ?: JSONObject()
 
@@ -240,9 +311,7 @@ object CloudflareDetailApi {
             }
 
             val placement = result.optJSONObject("placement")?.optString("mode") ?: "—"
-
-            // logpush 可能在 script-settings
-            var logpush = result.optBoolean("logpush", false)
+            val logpush = result.optBoolean("logpush", false)
 
             ApiResult(
                 true,
@@ -255,6 +324,61 @@ object CloudflareDetailApi {
                     placementMode = placement
                 )
             )
+        } catch (e: Exception) {
+            ApiResult(false, error = e.message ?: "网络错误")
+        }
+    }
+
+    suspend fun patchScriptSettings(
+        email: String,
+        apiKey: String,
+        accountId: String,
+        scriptName: String,
+        settingsJsonBody: String
+    ): ApiResult<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val req = authPatch(
+                email, apiKey,
+                "$BASE/accounts/$accountId/workers/scripts/$scriptName/settings",
+                settingsJsonBody
+            )
+            executeWrite(req, "更新设置失败")
+        } catch (e: Exception) {
+            ApiResult(false, error = e.message ?: "网络错误")
+        }
+    }
+
+    suspend fun deleteWorker(
+        email: String,
+        apiKey: String,
+        accountId: String,
+        scriptName: String
+    ): ApiResult<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val req = authDelete(
+                email, apiKey,
+                "$BASE/accounts/$accountId/workers/scripts/$scriptName"
+            )
+            executeWrite(req, "删除 Worker 失败")
+        } catch (e: Exception) {
+            ApiResult(false, error = e.message ?: "网络错误")
+        }
+    }
+
+    suspend fun putSchedules(
+        email: String,
+        apiKey: String,
+        accountId: String,
+        scriptName: String,
+        schedulesJsonArray: String
+    ): ApiResult<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val req = authPut(
+                email, apiKey,
+                "$BASE/accounts/$accountId/workers/scripts/$scriptName/schedules",
+                schedulesJsonArray
+            )
+            executeWrite(req, "更新触发器失败")
         } catch (e: Exception) {
             ApiResult(false, error = e.message ?: "网络错误")
         }
