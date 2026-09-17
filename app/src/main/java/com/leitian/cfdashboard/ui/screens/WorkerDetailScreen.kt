@@ -141,11 +141,11 @@ fun WorkerDetailScreen(
                                     if (isPages) {
                                         showPagesUnsupported = true
                                     } else {
+                                        // 只声明 JS 相关 MIME；保留 text/plain 兼容部分厂商把 .js 标成 plain
                                         filePicker.launch(arrayOf(
                                             "application/javascript",
                                             "text/javascript",
-                                            "text/plain",
-                                            "*/*"
+                                            "text/plain"
                                         ))
                                     }
                                 }
