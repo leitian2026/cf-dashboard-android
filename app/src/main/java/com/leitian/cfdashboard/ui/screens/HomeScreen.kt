@@ -43,8 +43,14 @@ fun HomeScreen(
     var showCreateDialog by remember { mutableStateOf(false) }
     var newWorkerName by remember { mutableStateOf("") }
 
-    val filtered = if (searchQuery.isBlank()) apps
-    else apps.filter { it.name.contains(searchQuery, true) || it.subtitle.contains(searchQuery, true) }
+    val filtered by remember(apps, searchQuery) {
+        derivedStateOf {
+            if (searchQuery.isBlank()) apps
+            else apps.filter {
+                it.name.contains(searchQuery, true) || it.subtitle.contains(searchQuery, true)
+            }
+        }
+    }
 
     if (showCreateDialog) {
         AlertDialog(
@@ -205,8 +211,11 @@ fun HomeScreen(
                         )
                     }
                 } else {
-                    items(filtered) { app ->
-                        AppListItem(app) { onAppClick(app.id, app.name, app.isPages) }
+                    items(filtered, key = { it.id }) { app ->
+                        AppListItem(
+                            app = app,
+                            onClick = { onAppClick(app.id, app.name, app.isPages) }
+                        )
                     }
                 }
             }
@@ -222,7 +231,8 @@ private fun BillingCard() {
     Card(
         Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Column(Modifier.padding(16.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -269,7 +279,12 @@ private fun PeriodStats(requests: String, cpu: String, errors: String, workersCo
 
 @Composable
 private fun StatCard(title: String, value: String, modifier: Modifier = Modifier) {
-    Card(modifier, shape = RoundedCornerShape(10.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+    Card(
+        modifier,
+        shape = RoundedCornerShape(10.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
         Column(Modifier.padding(12.dp)) {
             Text(title, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(4.dp))
@@ -283,7 +298,8 @@ private fun AppListItem(app: CloudflareApi.AppItem, onClick: () -> Unit) {
     Card(
         Modifier.fillMaxWidth().clickable(onClick = onClick),
         shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(
