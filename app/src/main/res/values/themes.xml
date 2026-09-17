@@ -1,11 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="Theme.CFDashboard" parent="android:Theme.Material.Light.NoActionBar" />
-
-    <!-- 冷启动闪屏：系统 SplashScreen API，读完凭据前保持显示 -->
-    <style name="Theme.CFDashboard.Splash" parent="Theme.SplashScreen">
-        <item name="windowSplashScreenBackground">@color/ic_launcher_background</item>
-        <item name="windowSplashScreenAnimatedIcon">@mipmap/ic_launcher</item>
-        <item name="postSplashScreenTheme">@style/Theme.CFDashboard</item>
-    </style>
 </resources>
