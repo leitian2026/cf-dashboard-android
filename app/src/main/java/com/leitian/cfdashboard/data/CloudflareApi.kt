@@ -229,16 +229,17 @@ object CloudflareApi {
                 // 否则 CF 按旧式 Service Worker 解析，顶层 export 会报 Unexpected token 'export'
                 val defaultScript = "export default {\n  async fetch(request, env, ctx) {\n    return new Response('Hello from $scriptName!');\n  }\n}\n"
                 val metadataJson = """{"main_module":"worker.js","compatibility_date":"2024-01-01"}"""
+                // metadata part 必须先于脚本 part，否则部分情况下 CF 会按旧式 Service Worker 解析
                 val body = MultipartBody.Builder().setType(MultipartBody.FORM)
+                    .addFormDataPart(
+                        "metadata",
+                        null,
+                        metadataJson.toRequestBody("application/json".toMediaType())
+                    )
                     .addFormDataPart(
                         "worker.js",
                         "worker.js",
                         defaultScript.toRequestBody("application/javascript+module".toMediaType())
-                    )
-                    .addFormDataPart(
-                        "metadata",
-                        "metadata.json",
-                        metadataJson.toRequestBody("application/json".toMediaType())
                     )
                     .build()
                 val req = Request.Builder().url("$BASE/accounts/$accountId/workers/scripts/$scriptName")
@@ -267,14 +268,14 @@ object CloudflareApi {
             val metadataJson = """{"main_module":"$moduleName","compatibility_date":"2024-01-01"}"""
             val body = MultipartBody.Builder().setType(MultipartBody.FORM)
                 .addFormDataPart(
+                    "metadata",
+                    null,
+                    metadataJson.toRequestBody("application/json".toMediaType())
+                )
+                .addFormDataPart(
                     moduleName,
                     moduleName,
                     bytes.toRequestBody("application/javascript+module".toMediaType())
-                )
-                .addFormDataPart(
-                    "metadata",
-                    "metadata.json",
-                    metadataJson.toRequestBody("application/json".toMediaType())
                 )
                 .build()
             val req = Request.Builder().url("$BASE/accounts/$accountId/workers/scripts/$scriptName")
