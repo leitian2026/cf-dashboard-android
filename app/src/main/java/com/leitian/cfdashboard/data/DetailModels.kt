@@ -7,6 +7,7 @@ data class DeploymentItem(
     val authorEmail: String,
     val message: String,
     val versionId: String,
+    val fullVersionId: String,
     val isLatest: Boolean
 )
 
