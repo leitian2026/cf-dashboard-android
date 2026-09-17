@@ -14,8 +14,9 @@ import kotlinx.coroutines.launch
 
 class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
 
-    private val _isLoggedIn = MutableStateFlow(false)
-    val isLoggedIn: StateFlow<Boolean> = _isLoggedIn.asStateFlow()
+    /** null = 仍在读取本地凭据；true/false = 已确认。用于避免冷启动闪登录页。 */
+    private val _isLoggedIn = MutableStateFlow<Boolean?>(null)
+    val isLoggedIn: StateFlow<Boolean?> = _isLoggedIn.asStateFlow()
 
     private val _loginError = MutableStateFlow<String?>(null)
     val loginError: StateFlow<String?> = _loginError.asStateFlow()
@@ -101,6 +102,8 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
                 _isLoggedIn.value = true
                 loadApps()
                 loadAccountStats()
+            } else {
+                _isLoggedIn.value = false
             }
         }
     }

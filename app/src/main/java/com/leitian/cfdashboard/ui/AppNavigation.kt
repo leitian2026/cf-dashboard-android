@@ -1,8 +1,15 @@
 package com.leitian.cfdashboard.ui
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
@@ -23,11 +30,24 @@ fun AppNavigation() {
     val tokenStore = TokenStore(context)
     val viewModel: MainViewModel = viewModel(factory = MainViewModelFactory(tokenStore))
     val isLoggedIn by viewModel.isLoggedIn.collectAsState()
-    val navController = rememberNavController()
 
+    // null：仍在读本地凭据，不创建 NavHost，避免冷启动先闪登录页
+    if (isLoggedIn == null) {
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = MaterialTheme.colorScheme.background
+        ) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator()
+            }
+        }
+        return
+    }
+
+    val navController = rememberNavController()
     NavHost(
         navController = navController,
-        startDestination = if (isLoggedIn) "home" else "login"
+        startDestination = if (isLoggedIn == true) "home" else "login"
     ) {
         composable("login") {
             LoginScreen(
