@@ -10,6 +10,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Logout
@@ -138,6 +139,19 @@ fun HomeScreen(
                 actions = {
                     IconButton(onClick = onLogout) {
                         Icon(Icons.Outlined.Logout, contentDescription = "退出")
+                    }
+                    IconButton(
+                        onClick = {
+                            viewModel.loadApps()
+                            viewModel.loadAccountStats()
+                        },
+                        enabled = !isLoading
+                    ) {
+                        if (isLoading) {
+                            CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                        } else {
+                            Icon(Icons.Default.Refresh, contentDescription = "刷新")
+                        }
                     }
                     Button(
                         onClick = {

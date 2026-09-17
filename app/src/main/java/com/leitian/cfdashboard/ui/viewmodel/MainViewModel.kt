@@ -251,6 +251,13 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
                 }
             }
         } catch (_: Exception) { /* 保持默认名 */ }
+        // App 层兜底：仅允许 .js（应对各厂商 MIME 识别不一致）
+        if (!fileName.endsWith(".js", ignoreCase = true) &&
+            !fileName.endsWith(".mjs", ignoreCase = true)
+        ) {
+            _uploadState.value = UploadState.Error("仅支持上传 .js / .mjs 文件")
+            return
+        }
         _uploadState.value = UploadState.Selected(uri, fileName)
     }
 
