@@ -65,14 +65,12 @@ fun WorkerDetailScreen(
     val filePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
-        // 选中后进入 Selected 状态，弹出确认对话框，不立即上传
         uri?.let { viewModel.onScriptSelected(it, context) }
     }
 
     LaunchedEffect(appName) { viewModel.loadDetail(appName) }
     DisposableEffect(Unit) { onDispose { viewModel.clearDetail() } }
 
-    // 选中文件后的确认对话框
     if (uploadState is MainViewModel.UploadState.Selected) {
         val selected = uploadState as MainViewModel.UploadState.Selected
         AlertDialog(
@@ -90,7 +88,6 @@ fun WorkerDetailScreen(
         )
     }
 
-    // 上传结果提示
     if (uploadState is MainViewModel.UploadState.Success || uploadState is MainViewModel.UploadState.Error) {
         val isSuccess = uploadState is MainViewModel.UploadState.Success
         val message = when (val s = uploadState) {
@@ -247,7 +244,7 @@ private fun MetricsTab(metrics: CloudflareApi.WorkerMetrics?, metricsLoading: Bo
             Text("指标", fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
             Spacer(Modifier.width(8.dp))
             Surface(shape = RoundedCornerShape(4.dp), color = Color(0xFFF0F0F0)) {
-                Text("最后一个 24 小时", fontSize = 11.sp, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
+                Text("今日（UTC）", fontSize = 11.sp, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
             }
             Spacer(Modifier.weight(1f))
             if (metricsLoading) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
