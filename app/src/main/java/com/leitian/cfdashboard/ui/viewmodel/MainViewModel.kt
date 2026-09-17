@@ -199,10 +199,22 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
                 _deploymentsError.value = "Pages 部署列表请使用 Cloudflare 控制台（当前版本未接 Pages Deployments API）"
                 _domains.value = emptyList()
             } else {
+                val infoResult = CloudflareApi.getScriptInfo(e, k, a, scriptName)
+                if (!infoResult.success) {
+                    val pages = CloudflareApi.getPagesProject(e, k, a, scriptName)
+                    if (pages.success) {
+                        _scriptInfo.value = pages.data
+                        _settingsError.value = "Pages 项目暂不支持 Workers 设置接口"
+                        _deploymentsError.value = "Pages 部署列表请使用 Cloudflare 控制台（当前版本未接 Pages Deployments API）"
+                        _domains.value = emptyList()
+                        _metricsLoading.value = false
+                        _tabLoading.value = false
+                        return@launch
+                    }
+                }
+                if (infoResult.success) _scriptInfo.value = infoResult.data
                 val metricsResult = CloudflareApi.getWorkerMetrics(e, k, a, scriptName)
                 if (metricsResult.success) _metrics.value = metricsResult.data else _metricsError.value = metricsResult.error
-                val infoResult = CloudflareApi.getScriptInfo(e, k, a, scriptName)
-                if (infoResult.success) _scriptInfo.value = infoResult.data
                 val dep = CloudflareDetailApi.listDeployments(e, k, a, scriptName)
                 if (dep.success) _deployments.value = dep.data ?: emptyList() else _deploymentsError.value = dep.error
                 val dom = CloudflareDetailApi.listDomains(e, k, a, scriptName)
