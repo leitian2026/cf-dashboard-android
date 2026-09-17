@@ -85,12 +85,24 @@ object CloudflareApi {
             .build()
     }
 
-    private fun utcNowMinusHours(hours: Int): Pair<String, String> {
+    /**
+     * Cloudflare Free 套餐每日限额在 UTC 00:00 重置（北京时间 08:00）。
+     * 返回「UTC 当天 0 点 → 现在」的时间范围，与官方每日额度口径一致。
+     */
+    private fun utcTodayRange(): Pair<String, String> {
+        val utc = TimeZone.getTimeZone("UTC")
         val sdf = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
-            timeZone = TimeZone.getTimeZone("UTC")
+            timeZone = utc
         }
         val end = Date()
-        val start = Date(end.time - hours * 60L * 60L * 1000L)
+        val cal = java.util.Calendar.getInstance(utc).apply {
+            time = end
+            set(java.util.Calendar.HOUR_OF_DAY, 0)
+            set(java.util.Calendar.MINUTE, 0)
+            set(java.util.Calendar.SECOND, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }
+        val start = cal.time
         return sdf.format(start) to sdf.format(end)
     }
 
@@ -349,7 +361,7 @@ object CloudflareApi {
         accountId: String
     ): ApiResult<AccountStats> = withContext(Dispatchers.IO) {
         try {
-            val (start, end) = utcNowMinusHours(24)
+            val (start, end) = utcTodayRange()
             val query = """
                 query {
                   viewer {
@@ -427,7 +439,7 @@ object CloudflareApi {
         scriptName: String
     ): ApiResult<WorkerMetrics> = withContext(Dispatchers.IO) {
         try {
-            val (start, end) = utcNowMinusHours(24)
+            val (start, end) = utcTodayRange()
 
             val query = """
                 query {
@@ -496,37 +508,33 @@ object CloudflareApi {
                 val sum = row.optJSONObject("sum")
                 val q = row.optJSONObject("quantiles")
                 val dim = row.optJSONObject("dimensions")
-
                 val reqs = sum?.optLong("requests") ?: 0L
                 val errs = sum?.optLong("errors") ?: 0L
                 val cpuUs = q?.optDouble("cpuTimeP50") ?: 0.0
-                val cpuMs = cpuUs / 1000.0
-
                 totalReq += reqs
                 totalErr += errs
-                if (cpuMs > 0) {
-                    cpuSum += cpuMs
+                if (cpuUs > 0) {
+                    cpuSum += cpuUs / 1000.0
                     cpuCnt++
                 }
-
                 val dt = dim?.optString("datetime") ?: continue
-                val hourKey = if (dt.length >= 13) dt.take(13) + ":00:00Z" else dt
-
+                val hourKey = if (dt.length >= 13) dt.substring(0, 13) else dt
                 hourReq[hourKey] = (hourReq[hourKey] ?: 0L) + reqs
                 hourErr[hourKey] = (hourErr[hourKey] ?: 0L) + errs
-                hourCpu.getOrPut(hourKey) { mutableListOf() }.add(cpuMs)
+                if (cpuUs > 0) {
+                    hourCpu.getOrPut(hourKey) { mutableListOf() }.add(cpuUs / 1000.0)
+                }
             }
 
-            val sortedHours = hourReq.keys.sorted()
-            val requestPoints = sortedHours.map { (hourReq[it] ?: 0L).toFloat() }
-            val errorPoints = sortedHours.map { (hourErr[it] ?: 0L).toFloat() }
-            val cpuPoints = sortedHours.map { h ->
-                val list = hourCpu[h]
-                if (list.isNullOrEmpty()) 0f else list.average().toFloat()
+            val sortedKeys = hourReq.keys.sorted()
+            val requestPoints = sortedKeys.map { (hourReq[it] ?: 0L).toFloat() }
+            val errorPoints = sortedKeys.map { (hourErr[it] ?: 0L).toFloat() }
+            val cpuPoints = sortedKeys.map { k ->
+                val list = hourCpu[k]
+                if (list.isNullOrEmpty()) 0f else (list.average()).toFloat()
             }
 
             val avgCpu = if (cpuCnt > 0) cpuSum / cpuCnt else 0.0
-
             ApiResult(
                 true,
                 WorkerMetrics(
@@ -550,67 +558,47 @@ object CloudflareApi {
         scriptName: String
     ): ApiResult<ScriptInfo> = withContext(Dispatchers.IO) {
         try {
-            var logsEnabled = false
-            var tracesEnabled = false
-            var bindingCount = 0
-
-            val settingsReq = authGet(
-                email, apiKey,
-                "$BASE/accounts/$accountId/workers/scripts/$scriptName/script-settings"
-            )
-            val settingsResp = client.newCall(settingsReq).execute()
-            val settingsBody = settingsResp.body?.string() ?: ""
-            if (settingsResp.isSuccessful) {
-                val json = JSONObject(settingsBody)
-                if (json.optBoolean("success", false)) {
-                    val result = json.optJSONObject("result")
-                    val obs = result?.optJSONObject("observability")
-                    logsEnabled = obs?.optBoolean("enabled", false) == true ||
-                            obs?.optJSONObject("logs")?.optBoolean("enabled", false) == true
-                    tracesEnabled = obs?.optJSONObject("traces")?.optBoolean("enabled", false) == true
-                }
+            val req = authGet(email, apiKey, "$BASE/accounts/$accountId/workers/scripts/$scriptName")
+            val resp = client.newCall(req).execute()
+            val body = resp.body?.string() ?: ""
+            if (!resp.isSuccessful) {
+                return@withContext ApiResult(false, error = "HTTP ${resp.code}")
             }
-
-            val bindReq = authGet(
-                email, apiKey,
-                "$BASE/accounts/$accountId/workers/scripts/$scriptName/settings"
-            )
-            val bindResp = client.newCall(bindReq).execute()
-            val bindBody = bindResp.body?.string() ?: ""
-            if (bindResp.isSuccessful) {
-                val json = JSONObject(bindBody)
-                if (json.optBoolean("success", false)) {
-                    val bindings = json.optJSONObject("result")?.optJSONArray("bindings")
-                    bindingCount = bindings?.length() ?: 0
-                }
+            val json = JSONObject(body)
+            if (!json.optBoolean("success", false)) {
+                return@withContext ApiResult(false, error = "获取脚本信息失败")
             }
-
+            val result = json.optJSONObject("result") ?: JSONObject()
+            val subdomain = result.optString("id", scriptName) + ".workers.dev"
+            val bindings = result.optJSONArray("bindings")
+            val bindingCount = bindings?.length() ?: 0
+            // observability fields may vary
+            val logs = result.optJSONObject("logpush") != null || result.optBoolean("logpush", false)
             ApiResult(
                 true,
                 ScriptInfo(
-                    subdomain = "$scriptName.workers.dev",
-                    logsEnabled = logsEnabled,
-                    tracesEnabled = tracesEnabled,
+                    subdomain = subdomain,
+                    logsEnabled = logs,
+                    tracesEnabled = false,
                     bindingCount = bindingCount
                 )
             )
         } catch (e: Exception) {
-            ApiResult(false, error = e.message ?: "读取脚本设置失败")
+            ApiResult(false, error = e.message ?: "网络错误")
         }
     }
 
     fun formatCount(n: Long): String {
         return when {
-            n >= 1_000_000 -> String.format(Locale.US, "%.2fM", n / 1_000_000.0)
-            n >= 1_000 -> String.format(Locale.US, "%.2fk", n / 1_000.0)
+            n >= 1_000_000 -> String.format(Locale.US, "%.1fM", n / 1_000_000.0)
+            n >= 1_000 -> String.format(Locale.US, "%.1fK", n / 1_000.0)
             else -> n.toString()
         }
     }
 
     fun formatCpu(ms: Double): String {
         return when {
-            ms <= 0 -> "0 ms"
-            ms < 1 -> String.format(Locale.US, "%.2f ms", ms)
+            ms >= 1000 -> String.format(Locale.US, "%.2f s", ms / 1000.0)
             else -> String.format(Locale.US, "%.1f ms", ms)
         }
     }
