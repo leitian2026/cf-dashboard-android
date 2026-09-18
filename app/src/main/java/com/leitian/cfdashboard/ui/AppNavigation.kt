@@ -6,6 +6,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -17,6 +18,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.leitian.cfdashboard.data.NetworkLogging
 import com.leitian.cfdashboard.data.TokenStore
 import com.leitian.cfdashboard.ui.screens.HomeScreen
 import com.leitian.cfdashboard.ui.screens.LoginScreen
@@ -30,6 +32,9 @@ fun AppNavigation() {
     val tokenStore = TokenStore(context)
     val viewModel: MainViewModel = viewModel(factory = MainViewModelFactory(tokenStore))
     val isLoggedIn by viewModel.isLoggedIn.collectAsState()
+
+    // 冷启动时把上次保存的日志开关状态恢复出来，早于任何网络请求即可生效。
+    LaunchedEffect(Unit) { NetworkLogging.restore(context) }
 
     // null：仍在读本地凭据，不创建 NavHost，避免冷启动先闪登录页
     if (isLoggedIn == null) {
