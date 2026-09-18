@@ -162,7 +162,10 @@ object CloudflareApi {
         }
     }
 
-    suspend fun getApps(email: String, apiKey: String, accountId: String): ApiResult<List<AppItem>> =
+    // 原来 getApps() 是 fetchWorkersSubdomainPrefix -> workers/scripts -> pages/projects 三个请求全串行，
+    // 一次性拼成一个大 list 才 emit，所以首页表现是转一下然后全部数据一起蹦出来。
+    // 拆成 Workers / Pages 两个独立函数，ViewModel 那边并发发出、谁先回来谁先显示。
+    suspend fun getWorkerScripts(email: String, apiKey: String, accountId: String): ApiResult<List<AppItem>> =
         withContext(Dispatchers.IO) {
             try {
                 val list = mutableListOf<AppItem>()
@@ -190,7 +193,19 @@ object CloudflareApi {
                             )
                         )
                     }
+                    ApiResult(true, list)
+                } else {
+                    ApiResult(false, error = "加载 Workers 列表失败（${workersResp.code}）")
                 }
+            } catch (e: Exception) {
+                ApiResult(false, error = e.message ?: "网络错误")
+            }
+        }
+
+    suspend fun getPagesProjects(email: String, apiKey: String, accountId: String): ApiResult<List<AppItem>> =
+        withContext(Dispatchers.IO) {
+            try {
+                val list = mutableListOf<AppItem>()
                 val pagesResp = client.newCall(authGet(email, apiKey, "$BASE/accounts/$accountId/pages/projects")).execute()
                 val pagesBody = pagesResp.body?.string() ?: ""
                 if (pagesResp.isSuccessful) {
@@ -210,8 +225,10 @@ object CloudflareApi {
                             )
                         )
                     }
+                    ApiResult(true, list)
+                } else {
+                    ApiResult(false, error = "加载 Pages 列表失败（${pagesResp.code}）")
                 }
-                ApiResult(true, list)
             } catch (e: Exception) {
                 ApiResult(false, error = e.message ?: "网络错误")
             }
