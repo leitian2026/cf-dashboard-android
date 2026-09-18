@@ -6,6 +6,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
+import okhttp3.MultipartReader
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -287,6 +288,63 @@ object CloudflareApi {
                 return@withContext ApiResult(false, error = err ?: "上传失败 (${resp.code})")
             }
             ApiResult(true, Unit)
+        } catch (e: Exception) {
+            ApiResult(false, error = e.message ?: "网络错误")
+        }
+    }
+
+    /**
+     * 下载 Worker 当前生效版本的脚本源码。
+     * CF 的 GET /workers/scripts/{name} 对 module worker 返回 multipart/form-data
+     * （metadata 部分 + 模块文件部分），对旧式 service worker 直接返回纯文本脚本，
+     * 这里两种情况都做了兼容解析。返回值为 (建议文件名, 原始字节)。
+     *
+     * 注意：该接口只能拿到"当前生效"的这一份代码，CF 没有开放按 version_id 下载
+     * 历史版本源码的接口（/versions/{version_id} 只返回该版本的元数据，不含源码）。
+     */
+    suspend fun downloadWorkerScript(
+        email: String, apiKey: String, accountId: String, scriptName: String
+    ): ApiResult<Pair<String, ByteArray>> = withContext(Dispatchers.IO) {
+        try {
+            val req = authGet(email, apiKey, "$BASE/accounts/$accountId/workers/scripts/$scriptName")
+            val resp = client.newCall(req).execute()
+            val body = resp.body
+            if (!resp.isSuccessful) {
+                val text = body?.string() ?: ""
+                val err = try { JSONObject(text).optJSONArray("errors")?.optJSONObject(0)?.optString("message") } catch (_: Exception) { null }
+                return@withContext ApiResult(false, error = err ?: "下载失败 (${resp.code})")
+            }
+            if (body == null) return@withContext ApiResult(false, error = "响应为空")
+            val defaultName = if (scriptName.endsWith(".js", true) || scriptName.endsWith(".mjs", true)) scriptName else "$scriptName.js"
+            val contentType = body.contentType()
+            if (contentType != null && contentType.type.equals("multipart", ignoreCase = true)) {
+                val boundary = contentType.parameter("boundary")
+                if (boundary.isNullOrBlank()) return@withContext ApiResult(false, error = "无法解析返回的脚本格式")
+                var fileName: String? = null
+                var content: ByteArray? = null
+                MultipartReader(body.source(), boundary).use { reader ->
+                    var part = reader.nextPart()
+                    while (part != null) {
+                        val disposition = part.headers["Content-Disposition"] ?: ""
+                        val partName = Regex("name=\"([^\"]*)\"").find(disposition)?.groupValues?.get(1)
+                        val partFileName = Regex("filename=\"([^\"]*)\"").find(disposition)?.groupValues?.get(1)
+                        val bytes = part.body.readByteArray()
+                        if (content == null && !partName.equals("metadata", ignoreCase = true)) {
+                            content = bytes
+                            if (!partFileName.isNullOrBlank()) fileName = partFileName
+                        }
+                        part.close()
+                        part = reader.nextPart()
+                    }
+                }
+                val finalContent = content
+                if (finalContent == null) ApiResult(false, error = "未能从返回结果中解析出脚本内容")
+                else ApiResult(true, (fileName ?: defaultName) to finalContent)
+            } else {
+                val bytes = body.bytes()
+                if (bytes.isEmpty()) ApiResult(false, error = "脚本内容为空")
+                else ApiResult(true, defaultName to bytes)
+            }
         } catch (e: Exception) {
             ApiResult(false, error = e.message ?: "网络错误")
         }
