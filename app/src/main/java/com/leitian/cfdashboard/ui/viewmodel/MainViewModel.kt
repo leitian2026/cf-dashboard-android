@@ -130,6 +130,17 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
     private val _uploadState = MutableStateFlow<UploadState>(UploadState.Idle)
     val uploadState: StateFlow<UploadState> = _uploadState.asStateFlow()
 
+    sealed class DownloadState {
+        object Idle : DownloadState()
+        object Loading : DownloadState()
+        data class Ready(val fileName: String, val bytes: ByteArray) : DownloadState()
+        data class Success(val message: String) : DownloadState()
+        data class Error(val message: String) : DownloadState()
+    }
+
+    private val _downloadState = MutableStateFlow<DownloadState>(DownloadState.Idle)
+    val downloadState: StateFlow<DownloadState> = _downloadState.asStateFlow()
+
     private var email: String? = null
     private var apiKey: String? = null
     private var accountId: String? = null
@@ -534,6 +545,39 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
                 else _uploadState.value = UploadState.Error(result.error ?: "上传失败")
             } catch (ex: Exception) {
                 _uploadState.value = UploadState.Error(ex.message ?: "上传异常")
+            }
+        }
+    }
+
+    fun clearDownloadState() { _downloadState.value = DownloadState.Idle }
+
+    /** 拉取 Worker 当前脚本源码；成功后进入 Ready 状态，由界面弹出"选择保存位置"的系统文件选择器 */
+    fun downloadScript(scriptName: String) {
+        val e = email; val k = apiKey; val a = accountId
+        if (e == null || k == null || a == null) { _downloadState.value = DownloadState.Error("未登录"); return }
+        viewModelScope.launch {
+            _downloadState.value = DownloadState.Loading
+            val result = CloudflareApi.downloadWorkerScript(e, k, a, scriptName)
+            val data = result.data
+            _downloadState.value = if (result.success && data != null) {
+                DownloadState.Ready(data.first, data.second)
+            } else {
+                DownloadState.Error(result.error ?: "下载失败")
+            }
+        }
+    }
+
+    /** 用户在系统文件选择器里选好保存位置后，把已下载的字节写入该 Uri */
+    fun saveDownloadedScript(uri: Uri, context: Context) {
+        val ready = _downloadState.value as? DownloadState.Ready ?: return
+        viewModelScope.launch {
+            _downloadState.value = DownloadState.Loading
+            try {
+                val ok = context.contentResolver.openOutputStream(uri)?.use { it.write(ready.bytes) } != null
+                _downloadState.value = if (ok) DownloadState.Success("已保存：${ready.fileName}")
+                else DownloadState.Error("无法写入所选位置")
+            } catch (ex: Exception) {
+                _downloadState.value = DownloadState.Error(ex.message ?: "保存失败")
             }
         }
     }
