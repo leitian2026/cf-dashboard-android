@@ -19,7 +19,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.FileDownload
+import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -64,15 +65,30 @@ fun WorkerDetailScreen(
     val settingsDetail by viewModel.settingsDetail.collectAsState()
     val settingsError by viewModel.settingsError.collectAsState()
     val uploadState by viewModel.uploadState.collectAsState()
+    val downloadState by viewModel.downloadState.collectAsState()
 
-    var menuExpanded by remember { mutableStateOf(false) }
     var showPagesUnsupported by remember { mutableStateOf(false) }
+    var showPagesDownloadUnsupported by remember { mutableStateOf(false) }
     val context = LocalContext.current
 
     val filePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         uri?.let { viewModel.onScriptSelected(it, context) }
+    }
+
+    // 下载脚本时，把内容存到用户在系统文件选择器里挑选的位置
+    val saveLocationPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/javascript")
+    ) { uri: Uri? ->
+        if (uri != null) viewModel.saveDownloadedScript(uri, context)
+        else viewModel.clearDownloadState()
+    }
+
+    // 脚本下载完成（DownloadState.Ready）后，立即弹出"选择保存位置"的系统对话框
+    LaunchedEffect(downloadState) {
+        val ready = downloadState as? MainViewModel.DownloadState.Ready
+        if (ready != null) saveLocationPicker.launch(ready.fileName)
     }
 
     LaunchedEffect(appName) { viewModel.loadDetail(appName) }
@@ -121,6 +137,34 @@ fun WorkerDetailScreen(
         )
     }
 
+    if (showPagesDownloadUnsupported) {
+        AlertDialog(
+            onDismissRequest = { showPagesDownloadUnsupported = false },
+            title = { Text("暂不支持") },
+            text = { Text("Pages 项目没有单一脚本文件，当前版本仅支持下载 Workers 的脚本代码。") },
+            confirmButton = {
+                TextButton(onClick = { showPagesDownloadUnsupported = false }) { Text("知道了") }
+            }
+        )
+    }
+
+    if (downloadState is MainViewModel.DownloadState.Success || downloadState is MainViewModel.DownloadState.Error) {
+        val isSuccess = downloadState is MainViewModel.DownloadState.Success
+        val message = when (val s = downloadState) {
+            is MainViewModel.DownloadState.Success -> s.message
+            is MainViewModel.DownloadState.Error -> s.message
+            else -> ""
+        }
+        AlertDialog(
+            onDismissRequest = { viewModel.clearDownloadState() },
+            title = { Text(if (isSuccess) "下载完成" else "下载失败") },
+            text = { Text(message) },
+            confirmButton = {
+                TextButton(onClick = { viewModel.clearDownloadState() }) { Text("确定") }
+            }
+        )
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -131,23 +175,20 @@ fun WorkerDetailScreen(
                     }
                 },
                 actions = {
-                    Box {
-                        IconButton(onClick = { menuExpanded = true }) {
-                            Icon(Icons.Default.MoreVert, "更多")
-                        }
-                        DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
-                            DropdownMenuItem(
-                                text = { Text("上传文件部署") },
-                                onClick = {
-                                    menuExpanded = false
-                                    if (isPages) showPagesUnsupported = true
-                                    else filePicker.launch(arrayOf("application/javascript", "text/javascript", "text/plain"))
-                                }
-                            )
-                        }
+                    if (uploadState is MainViewModel.UploadState.Loading || downloadState is MainViewModel.DownloadState.Loading) {
+                        CircularProgressIndicator(Modifier.size(20.dp).padding(end = 8.dp), strokeWidth = 2.dp)
                     }
-                    if (uploadState is MainViewModel.UploadState.Loading) {
-                        CircularProgressIndicator(Modifier.size(20.dp).padding(end = 12.dp), strokeWidth = 2.dp)
+                    IconButton(onClick = {
+                        if (isPages) showPagesUnsupported = true
+                        else filePicker.launch(arrayOf("application/javascript", "text/javascript", "text/plain"))
+                    }) {
+                        Icon(Icons.Default.FileUpload, "上传文件部署")
+                    }
+                    IconButton(onClick = {
+                        if (isPages) showPagesDownloadUnsupported = true
+                        else viewModel.downloadScript(appName)
+                    }) {
+                        Icon(Icons.Default.FileDownload, "下载代码")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
