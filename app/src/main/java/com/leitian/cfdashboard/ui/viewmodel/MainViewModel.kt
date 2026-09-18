@@ -180,8 +180,31 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
         val e = email ?: return; val k = apiKey ?: return; val a = accountId ?: return
         viewModelScope.launch {
             _isLoading.value = true
-            val result = CloudflareApi.getApps(e, k, a)
-            if (result.success) _apps.value = result.data ?: emptyList()
+            // Workers 和 Pages 是两个独立接口，不用等两个都回来再合并成一个大 list 才显示——
+            // 谁先回来就先把谁摆上去，避免"卡一下然后全部一起出来"。
+            // 刷新时另一半还没回来，先拿上一次已有的数据垫着，避免列表先"掉一半"再补回来。
+            val previous = _apps.value
+            var workers: List<CloudflareApi.AppItem>? = null
+            var pages: List<CloudflareApi.AppItem>? = null
+            fun publish() {
+                val w = workers ?: previous.filter { !it.isPages }
+                val p = pages ?: previous.filter { it.isPages }
+                // Cloudflare 接口本身不保证返回顺序稳定，不排序的话每次刷新第一条可能都不一样。
+                // 这里固定成按名字排序，Workers 分组永远排在 Pages 前面，顺序就稳定下来了。
+                _apps.value = w.sortedBy { it.name.lowercase() } + p.sortedBy { it.name.lowercase() }
+            }
+            coroutineScope {
+                launch {
+                    val r = CloudflareApi.getWorkerScripts(e, k, a)
+                    workers = r.data ?: emptyList()
+                    publish()
+                }
+                launch {
+                    val r = CloudflareApi.getPagesProjects(e, k, a)
+                    pages = r.data ?: emptyList()
+                    publish()
+                }
+            }
             _isLoading.value = false
         }
     }
