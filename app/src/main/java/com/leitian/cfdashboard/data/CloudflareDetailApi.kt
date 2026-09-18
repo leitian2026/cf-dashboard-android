@@ -7,7 +7,6 @@ import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import okhttp3.logging.HttpLoggingInterceptor
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
@@ -21,11 +20,9 @@ object CloudflareDetailApi {
     private val JSON = "application/json".toMediaType()
 
     private val client: OkHttpClient by lazy {
-        val logging = HttpLoggingInterceptor().apply {
-            level = HttpLoggingInterceptor.Level.BODY
-        }
+        // 和 CloudflareApi 共用同一个 NetworkLogging.interceptor，两边的日志开关联动。
         OkHttpClient.Builder()
-            .addInterceptor(logging)
+            .addInterceptor(NetworkLogging.interceptor)
             .connectTimeout(25, TimeUnit.SECONDS)
             .readTimeout(40, TimeUnit.SECONDS)
             .build()

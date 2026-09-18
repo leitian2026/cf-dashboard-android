@@ -10,7 +10,6 @@ import okhttp3.MultipartReader
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import okhttp3.logging.HttpLoggingInterceptor
 import org.json.JSONArray
 import org.json.JSONObject
 import java.text.SimpleDateFormat
@@ -25,11 +24,10 @@ object CloudflareApi {
     private const val GRAPHQL = "https://api.cloudflare.com/client/v4/graphql"
 
     private val client: OkHttpClient by lazy {
-        val logging = HttpLoggingInterceptor().apply {
-            level = HttpLoggingInterceptor.Level.BODY
-        }
+        // 日志级别由 NetworkLogging 统一控制（默认关闭），打开/关闭时直接改这个共享
+        // 拦截器实例的 level，不需要重建 OkHttpClient。
         OkHttpClient.Builder()
-            .addInterceptor(logging)
+            .addInterceptor(NetworkLogging.interceptor)
             .connectTimeout(25, TimeUnit.SECONDS)
             .readTimeout(40, TimeUnit.SECONDS)
             .build()
