@@ -7,6 +7,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.leitian.cfdashboard.data.*
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -224,18 +225,40 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
                     }
                 }
                 if (infoResult.success) _scriptInfo.value = infoResult.data
-                val metricsResult = CloudflareApi.getWorkerMetrics(e, k, a, scriptName)
-                if (metricsResult.success) _metrics.value = metricsResult.data else _metricsError.value = metricsResult.error
-                val dep = CloudflareDetailApi.listDeployments(e, k, a, scriptName)
-                if (dep.success) _deployments.value = dep.data ?: emptyList() else _deploymentsError.value = dep.error
-                val dom = CloudflareDetailApi.listDomains(e, k, a, scriptName)
-                if (dom.success) _domains.value = dom.data ?: emptyList() else _domainsError.value = dom.error
-                val acc = CloudflareDetailApi.listAccessApps(e, k, a)
-                if (acc.success) _accessApps.value = acc.data ?: emptyList() else _accessError.value = acc.error
-                val set = CloudflareDetailApi.getSettingsDetail(e, k, a, scriptName)
-                if (set.success) _settingsDetail.value = set.data else _settingsError.value = set.error
-                val cron = CloudflareDetailApi.listSchedules(e, k, a, scriptName)
-                if (cron.success) _cronTriggers.value = cron.data ?: emptyList()
+
+                // 剩下这 6 个请求互不依赖，并发发出——每个一回来就更新自己的 StateFlow，
+                // 不等别的请求，界面上数据会一块块蹦出来，而不是等全部返回才一次性显示。
+                coroutineScope {
+                    launch {
+                        val metricsResult = CloudflareApi.getWorkerMetrics(e, k, a, scriptName)
+                        if (metricsResult.success) _metrics.value = metricsResult.data else _metricsError.value = metricsResult.error
+                        _metricsLoading.value = false
+                    }
+                    launch {
+                        val dep = CloudflareDetailApi.listDeployments(e, k, a, scriptName)
+                        if (dep.success) _deployments.value = dep.data ?: emptyList() else _deploymentsError.value = dep.error
+                    }
+                    launch {
+                        val dom = CloudflareDetailApi.listDomains(e, k, a, scriptName)
+                        if (dom.success) _domains.value = dom.data ?: emptyList() else _domainsError.value = dom.error
+                    }
+                    launch {
+                        val acc = CloudflareDetailApi.listAccessApps(e, k, a)
+                        if (acc.success) _accessApps.value = acc.data ?: emptyList() else _accessError.value = acc.error
+                    }
+                    launch {
+                        val set = CloudflareDetailApi.getSettingsDetail(e, k, a, scriptName)
+                        if (set.success) _settingsDetail.value = set.data else _settingsError.value = set.error
+                    }
+                    launch {
+                        val cron = CloudflareDetailApi.listSchedules(e, k, a, scriptName)
+                        if (cron.success) _cronTriggers.value = cron.data ?: emptyList()
+                    }
+                    // coroutineScope 会等上面 6 个 launch 全部结束才往下走，
+                    // 这里再统一把 tabLoading 关掉（metricsLoading 已经在它自己那个 launch 里提前关了）。
+                }
+                _tabLoading.value = false
+                return@launch
             }
             _metricsLoading.value = false; _tabLoading.value = false
         }
