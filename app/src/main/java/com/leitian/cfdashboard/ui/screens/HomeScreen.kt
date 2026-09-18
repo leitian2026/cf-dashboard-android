@@ -9,6 +9,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
@@ -20,11 +21,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.leitian.cfdashboard.data.CloudflareApi
+import com.leitian.cfdashboard.data.NetworkLogging
 import com.leitian.cfdashboard.ui.viewmodel.MainViewModel
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -43,6 +47,16 @@ fun HomeScreen(
     var searchQuery by remember { mutableStateOf("") }
     var showCreateDialog by remember { mutableStateOf(false) }
     var newWorkerName by remember { mutableStateOf("") }
+
+    // 网络请求详细日志开关：默认关闭，遇到问题时手动打开，用完记得关掉
+    // （响应体里可能带账户信息，别一直开着）。
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var showDebugMenu by remember { mutableStateOf(false) }
+    var verboseLogging by remember { mutableStateOf(NetworkLogging.enabled) }
+    LaunchedEffect(Unit) {
+        NetworkLogging.enabledFlow(context).collect { verboseLogging = it }
+    }
 
     val filtered by remember(apps, searchQuery) {
         derivedStateOf {
@@ -139,6 +153,44 @@ fun HomeScreen(
                     }
                 },
                 actions = {
+                    Box {
+                        IconButton(onClick = { showDebugMenu = true }) {
+                            Icon(
+                                Icons.Default.BugReport,
+                                contentDescription = "调试",
+                                tint = if (verboseLogging) MaterialTheme.colorScheme.primary
+                                       else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        DropdownMenu(expanded = showDebugMenu, onDismissRequest = { showDebugMenu = false }) {
+                            DropdownMenuItem(
+                                text = {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.width(240.dp)
+                                    ) {
+                                        Column(Modifier.weight(1f)) {
+                                            Text("详细网络日志", fontSize = 13.sp)
+                                            Text(
+                                                "排查问题时打开，完整请求/响应会打到 Logcat",
+                                                fontSize = 11.sp,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                        Spacer(Modifier.width(8.dp))
+                                        Switch(
+                                            checked = verboseLogging,
+                                            onCheckedChange = { checked ->
+                                                verboseLogging = checked
+                                                scope.launch { NetworkLogging.setEnabled(context, checked) }
+                                            }
+                                        )
+                                    }
+                                },
+                                onClick = {}
+                            )
+                        }
+                    }
                     IconButton(onClick = onLogout) {
                         Icon(Icons.Outlined.Logout, contentDescription = "退出")
                     }
