@@ -310,6 +310,7 @@ object CloudflareApi {
             if (existing.has("placement")) metadata.put("placement", existing.getJSONObject("placement"))
             if (existing.has("tags")) metadata.put("tags", existing.getJSONArray("tags"))
             if (existing.has("observability")) metadata.put("observability", existing.getJSONObject("observability"))
+            if (existing.has("logpush")) metadata.put("logpush", existing.getBoolean("logpush"))
             if (existing.has("limits")) metadata.put("limits", existing.getJSONObject("limits"))
             if (!metadata.has("compatibility_date")) metadata.put("compatibility_date", "2024-01-01")
 
