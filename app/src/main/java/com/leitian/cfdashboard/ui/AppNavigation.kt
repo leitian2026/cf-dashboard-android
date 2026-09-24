@@ -64,12 +64,22 @@ fun AppNavigation() {
                 }
             )
         }
+        // 从首页"添加账号"进来的登录页：登录成功或取消都是回到首页（popBackStack），
+        // 不会像冷启动那个 "login" 一样清空返回栈。
+        composable("login_add") {
+            LoginScreen(
+                viewModel = viewModel,
+                onLoginSuccess = { navController.popBackStack() },
+                onCancel = { navController.popBackStack() }
+            )
+        }
         composable("home") {
             HomeScreen(
                 viewModel = viewModel,
-                onAppClick = { id, name, isPages ->
-                    navController.navigate("detail/$id/$name/$isPages")
+                onAppClick = { accountId, id, name, isPages ->
+                    navController.navigate("detail/$accountId/$id/$name/$isPages")
                 },
+                onAddAccount = { navController.navigate("login_add") },
                 onLogout = {
                     viewModel.logout()
                     navController.navigate("login") {
@@ -79,13 +89,15 @@ fun AppNavigation() {
             )
         }
         composable(
-            route = "detail/{appId}/{appName}/{isPages}",
+            route = "detail/{accountId}/{appId}/{appName}/{isPages}",
             arguments = listOf(
+                navArgument("accountId") { type = NavType.StringType },
                 navArgument("appId") { type = NavType.StringType },
                 navArgument("appName") { type = NavType.StringType },
                 navArgument("isPages") { type = NavType.BoolType }
             )
         ) { entry ->
+            val accountId = entry.arguments?.getString("accountId") ?: ""
             val appId = entry.arguments?.getString("appId") ?: ""
             val appName = entry.arguments?.getString("appName") ?: ""
             val isPages = entry.arguments?.getBoolean("isPages") ?: false
@@ -93,6 +105,7 @@ fun AppNavigation() {
                 appId = appId,
                 appName = appName,
                 isPages = isPages,
+                accountId = accountId,
                 viewModel = viewModel,
                 onBack = { navController.popBackStack() }
             )
