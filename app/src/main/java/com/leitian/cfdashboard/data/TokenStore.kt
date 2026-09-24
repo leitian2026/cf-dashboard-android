@@ -5,6 +5,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -30,6 +31,8 @@ class TokenStore(private val context: Context) {
     private val ACCOUNT_ID = stringPreferencesKey("account_id")
     private val ACCOUNT_NAME = stringPreferencesKey("account_name")
     private val ACCOUNTS_JSON = stringPreferencesKey("accounts_json")
+    // 首页 Workers 列表里"已折叠"的账号 id，重启 App 后保持上次的折叠/展开状态。
+    private val COLLAPSED_ACCOUNT_IDS = stringSetPreferencesKey("collapsed_account_ids")
 
     /** 保留字段：第一个已登录账号的邮箱，仅用于兼容旧代码里对单一邮箱的展示需求。 */
     val emailFlow: Flow<String?> = context.dataStore.data.map { prefs ->
@@ -103,6 +106,13 @@ class TokenStore(private val context: Context) {
 
     suspend fun removeAccount(accountId: String) {
         saveAccounts(getAccounts().filterNot { it.accountId == accountId })
+    }
+
+    suspend fun getCollapsedAccountIds(): Set<String> =
+        context.dataStore.data.first()[COLLAPSED_ACCOUNT_IDS] ?: emptySet()
+
+    suspend fun setCollapsedAccountIds(ids: Collection<String>) {
+        context.dataStore.edit { prefs -> prefs[COLLAPSED_ACCOUNT_IDS] = ids.toSet() }
     }
 
     suspend fun clear() {
