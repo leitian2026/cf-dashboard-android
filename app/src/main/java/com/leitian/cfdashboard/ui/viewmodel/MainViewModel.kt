@@ -7,6 +7,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.leitian.cfdashboard.data.*
+import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -18,6 +19,10 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
     private val _isLoggedIn = MutableStateFlow<Boolean?>(null)
     val isLoggedIn: StateFlow<Boolean?> = _isLoggedIn.asStateFlow()
 
+    // 已登录的所有账号——首页会把这些账号的 Workers/Pages 同时拉出来一起显示。
+    private val _accounts = MutableStateFlow<List<SavedAccount>>(emptyList())
+    val accounts: StateFlow<List<SavedAccount>> = _accounts.asStateFlow()
+
     private val _loginError = MutableStateFlow<String?>(null)
     val loginError: StateFlow<String?> = _loginError.asStateFlow()
 
@@ -27,11 +32,12 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
     private val _apps = MutableStateFlow<List<CloudflareApi.AppItem>>(emptyList())
     val apps: StateFlow<List<CloudflareApi.AppItem>> = _apps.asStateFlow()
 
-    private val _accountStats = MutableStateFlow<CloudflareApi.AccountStats?>(null)
-    val accountStats: StateFlow<CloudflareApi.AccountStats?> = _accountStats.asStateFlow()
+    // 按账号分开统计——key 是 accountId，首页每个账号一张卡片区域。
+    private val _accountStatsByAccount = MutableStateFlow<Map<String, CloudflareApi.AccountStats>>(emptyMap())
+    val accountStatsByAccount: StateFlow<Map<String, CloudflareApi.AccountStats>> = _accountStatsByAccount.asStateFlow()
 
-    private val _accountStatsError = MutableStateFlow<String?>(null)
-    val accountStatsError: StateFlow<String?> = _accountStatsError.asStateFlow()
+    private val _accountStatsErrorByAccount = MutableStateFlow<Map<String, String>>(emptyMap())
+    val accountStatsErrorByAccount: StateFlow<Map<String, String>> = _accountStatsErrorByAccount.asStateFlow()
 
     private val _metrics = MutableStateFlow<CloudflareApi.WorkerMetrics?>(null)
     val metrics: StateFlow<CloudflareApi.WorkerMetrics?> = _metrics.asStateFlow()
@@ -142,15 +148,19 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
     private val _downloadState = MutableStateFlow<DownloadState>(DownloadState.Idle)
     val downloadState: StateFlow<DownloadState> = _downloadState.asStateFlow()
 
+    // "当前活跃账号"：详情页里各种读写操作（绑定、变量、域名、队列……）都是针对一个具体
+    // Worker 的，而一个 Worker 只属于一个账号，所以这里维持单一套活跃凭据即可——
+    // 进入详情页（loadDetail）或在首页选择账号创建 Worker 时，通过 selectAccount 切换到位。
     private var email: String? = null
     private var apiKey: String? = null
     private var accountId: String? = null
+    private var accountName: String? = null
 
     init {
         viewModelScope.launch {
-            val (e, k, a) = tokenStore.getCredentials()
-            if (!e.isNullOrBlank() && !k.isNullOrBlank() && !a.isNullOrBlank()) {
-                email = e; apiKey = k; accountId = a
+            val accounts = tokenStore.getAccounts()
+            if (accounts.isNotEmpty()) {
+                _accounts.value = accounts
                 _isLoggedIn.value = true
                 loadApps(); loadAccountStats()
             } else {
@@ -159,50 +169,94 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
         }
     }
 
-    fun login(emailInput: String, keyInput: String) {
+    /** 把某个已登录账号设为当前活跃账号，供详情页/创建 Worker 等单账号操作使用。 */
+    private fun selectAccount(targetAccountId: String): Boolean {
+        val acc = _accounts.value.find { it.accountId == targetAccountId } ?: return false
+        email = acc.email; apiKey = acc.apiKey; accountId = acc.accountId; accountName = acc.accountName
+        return true
+    }
+
+    /** 添加一个账号登录（不会顶掉已经登录的其他账号）。同一个 account id 重复添加会覆盖旧凭据。 */
+    fun addAccount(emailInput: String, keyInput: String, onResult: (Boolean) -> Unit = {}) {
         val e = emailInput.trim(); val k = keyInput.trim()
-        if (e.isBlank() || k.isBlank()) { _loginError.value = "请输入邮箱和 Global API Key"; return }
+        if (e.isBlank() || k.isBlank()) { _loginError.value = "请输入邮箱和 Global API Key"; onResult(false); return }
         viewModelScope.launch {
             _isLoading.value = true; _loginError.value = null
             val result = CloudflareApi.verifyGlobalKey(e, k)
             if (result.success && result.data != null) {
-                email = e; apiKey = k; accountId = result.data.id
-                tokenStore.save(e, k, result.data.id, result.data.name)
-                _isLoggedIn.value = true; loadApps(); loadAccountStats()
+                if (_accounts.value.any { it.accountId == result.data.id }) {
+                    _loginError.value = "该账号已经登录过了"
+                    _isLoading.value = false
+                    onResult(false)
+                    return@launch
+                }
+                val account = SavedAccount(e, k, result.data.id, result.data.name)
+                tokenStore.addAccount(account)
+                _accounts.value = tokenStore.getAccounts()
+                _isLoggedIn.value = true
+                loadApps(); loadAccountStats()
+                _isLoading.value = false
+                onResult(true)
             } else {
                 _loginError.value = result.error ?: "登录失败"
+                _isLoading.value = false
+                onResult(false)
             }
-            _isLoading.value = false
+        }
+    }
+
+    /** 移除单个已登录账号；如果移除的是最后一个账号，回到登录页。 */
+    fun removeAccount(targetAccountId: String) {
+        viewModelScope.launch {
+            tokenStore.removeAccount(targetAccountId)
+            val remaining = tokenStore.getAccounts()
+            _accounts.value = remaining
+            _apps.value = _apps.value.filterNot { it.accountId == targetAccountId }
+            _accountStatsByAccount.value = _accountStatsByAccount.value - targetAccountId
+            _accountStatsErrorByAccount.value = _accountStatsErrorByAccount.value - targetAccountId
+            if (accountId == targetAccountId) { email = null; apiKey = null; accountId = null; accountName = null }
+            if (remaining.isEmpty()) {
+                _isLoggedIn.value = false
+                _apps.value = emptyList(); clearDetail()
+            }
         }
     }
 
     fun loadApps() {
-        val e = email ?: return; val k = apiKey ?: return; val a = accountId ?: return
+        val accountsSnapshot = _accounts.value
+        if (accountsSnapshot.isEmpty()) return
         viewModelScope.launch {
             _isLoading.value = true
-            // Workers 和 Pages 是两个独立接口，不用等两个都回来再合并成一个大 list 才显示——
-            // 谁先回来就先把谁摆上去，避免"卡一下然后全部一起出来"。
-            // 刷新时另一半还没回来，先拿上一次已有的数据垫着，避免列表先"掉一半"再补回来。
+            // 每个账号的 Workers / Pages 各自独立请求，谁先回来就先把谁摆上去，
+            // 不用等所有账号、所有接口都返回才一起显示。
+            // 刷新时还没回来的部分，先拿上一次已有的数据垫着，避免列表先"掉一块"再补回来。
             val previous = _apps.value
-            var workers: List<CloudflareApi.AppItem>? = null
-            var pages: List<CloudflareApi.AppItem>? = null
+            val workersByAccount = java.util.concurrent.ConcurrentHashMap<String, List<CloudflareApi.AppItem>>()
+            val pagesByAccount = java.util.concurrent.ConcurrentHashMap<String, List<CloudflareApi.AppItem>>()
             fun publish() {
-                val w = workers ?: previous.filter { !it.isPages }
-                val p = pages ?: previous.filter { it.isPages }
-                // Cloudflare 接口本身不保证返回顺序稳定，不排序的话每次刷新第一条可能都不一样。
-                // 这里固定成按名字排序，Workers 分组永远排在 Pages 前面，顺序就稳定下来了。
-                _apps.value = w.sortedBy { it.name.lowercase() } + p.sortedBy { it.name.lowercase() }
+                val result = mutableListOf<CloudflareApi.AppItem>()
+                for (acc in accountsSnapshot) {
+                    val w = workersByAccount[acc.accountId] ?: previous.filter { it.accountId == acc.accountId && !it.isPages }
+                    val p = pagesByAccount[acc.accountId] ?: previous.filter { it.accountId == acc.accountId && it.isPages }
+                    // Cloudflare 接口本身不保证返回顺序稳定，这里固定按名字排序，
+                    // 同一账号内 Workers 排在 Pages 前面，顺序就稳定下来了。
+                    result += w.sortedBy { it.name.lowercase() }
+                    result += p.sortedBy { it.name.lowercase() }
+                }
+                _apps.value = result
             }
             coroutineScope {
-                launch {
-                    val r = CloudflareApi.getWorkerScripts(e, k, a)
-                    workers = r.data ?: emptyList()
-                    publish()
-                }
-                launch {
-                    val r = CloudflareApi.getPagesProjects(e, k, a)
-                    pages = r.data ?: emptyList()
-                    publish()
+                for (acc in accountsSnapshot) {
+                    launch {
+                        val r = CloudflareApi.getWorkerScripts(acc.email, acc.apiKey, acc.accountId, acc.accountName)
+                        workersByAccount[acc.accountId] = r.data ?: emptyList()
+                        publish()
+                    }
+                    launch {
+                        val r = CloudflareApi.getPagesProjects(acc.email, acc.apiKey, acc.accountId, acc.accountName)
+                        pagesByAccount[acc.accountId] = r.data ?: emptyList()
+                        publish()
+                    }
                 }
             }
             _isLoading.value = false
@@ -210,16 +264,36 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
     }
 
     fun loadAccountStats() {
-        val e = email ?: return; val k = apiKey ?: return; val a = accountId ?: return
+        val accountsSnapshot = _accounts.value
+        if (accountsSnapshot.isEmpty()) return
         viewModelScope.launch {
-            _accountStatsError.value = null
-            val result = CloudflareApi.getAccountStats(e, k, a)
-            if (result.success) _accountStats.value = result.data else _accountStatsError.value = result.error
+            // 逐个账号并发查询，各自的结果分开存，互不覆盖——一个账号查询失败不影响其他账号显示。
+            val results = coroutineScope {
+                accountsSnapshot.map { acc ->
+                    async { acc to CloudflareApi.getAccountStats(acc.email, acc.apiKey, acc.accountId) }
+                }.map { it.await() }
+            }
+            val statsMap = mutableMapOf<String, CloudflareApi.AccountStats>()
+            val errorMap = mutableMapOf<String, String>()
+            for ((acc, r) in results) {
+                if (r.success && r.data != null) {
+                    statsMap[acc.accountId] = r.data
+                } else {
+                    errorMap[acc.accountId] = r.error ?: "统计查询失败"
+                }
+            }
+            _accountStatsByAccount.value = statsMap
+            _accountStatsErrorByAccount.value = errorMap
         }
     }
 
-    fun loadDetail(scriptName: String, isPages: Boolean = false) {
-        val e = email ?: return; val k = apiKey ?: return; val a = accountId ?: return
+    // accountId 默认取当前已经激活的账号——loadDetail() 内部自己刷新数据时(比如回滚部署、
+    // 增删自定义域名后)不用每次都重新传一遍，只有从首页第一次进入详情页时才需要显式传入。
+    fun loadDetail(scriptName: String, isPages: Boolean = false, accountId: String = this.accountId ?: "") {
+        if (accountId.isBlank() || !selectAccount(accountId)) {
+            _metricsError.value = "账号信息丢失，请返回后重试"; return
+        }
+        val e = email ?: return; val k = apiKey ?: return; val a = this.accountId ?: return
         viewModelScope.launch {
             _metricsLoading.value = true; _tabLoading.value = true
             _metrics.value = null; _scriptInfo.value = null; _metricsError.value = null
@@ -545,8 +619,9 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
     fun clearCreateError() { _createError.value = null }
     fun clearUploadState() { _uploadState.value = UploadState.Idle }
 
-    fun createWorker(name: String, onSuccess: () -> Unit) {
-        val e = email; val k = apiKey; val a = accountId
+    fun createWorker(accountId: String, name: String, onSuccess: () -> Unit) {
+        if (!selectAccount(accountId)) { _createError.value = "请选择要在哪个账号下创建"; return }
+        val e = email; val k = apiKey; val a = this.accountId
         if (e == null || k == null || a == null) { _createError.value = "未登录"; return }
         viewModelScope.launch {
             _createLoading.value = true; _createError.value = null
@@ -628,10 +703,14 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
         }
     }
 
+    /** 退出全部账号。 */
     fun logout() {
         viewModelScope.launch {
-            tokenStore.clear(); email = null; apiKey = null; accountId = null
-            _isLoggedIn.value = false; _apps.value = emptyList(); _accountStats.value = null; clearDetail()
+            tokenStore.clear(); email = null; apiKey = null; accountId = null; accountName = null
+            _accounts.value = emptyList()
+            _isLoggedIn.value = false; _apps.value = emptyList()
+            _accountStatsByAccount.value = emptyMap(); _accountStatsErrorByAccount.value = emptyMap()
+            clearDetail()
         }
     }
 }
