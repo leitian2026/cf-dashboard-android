@@ -42,7 +42,11 @@ object CloudflareApi {
         val subtitle: String,
         val domain: String,
         val updatedAt: String,
-        val isPages: Boolean
+        val isPages: Boolean,
+        // 这个 App 属于哪个 Cloudflare 账号——同时显示多账号内容时，用来在列表里打标签、
+        // 以及点进详情页时知道该用哪套邮箱/Key。
+        val accountId: String = "",
+        val accountName: String = ""
     )
 
     data class AccountStats(
@@ -165,7 +169,7 @@ object CloudflareApi {
     // 原来 getApps() 是 fetchWorkersSubdomainPrefix -> workers/scripts -> pages/projects 三个请求全串行，
     // 一次性拼成一个大 list 才 emit，所以首页表现是转一下然后全部数据一起蹦出来。
     // 拆成 Workers / Pages 两个独立函数，ViewModel 那边并发发出、谁先回来谁先显示。
-    suspend fun getWorkerScripts(email: String, apiKey: String, accountId: String): ApiResult<List<AppItem>> =
+    suspend fun getWorkerScripts(email: String, apiKey: String, accountId: String, accountName: String = ""): ApiResult<List<AppItem>> =
         withContext(Dispatchers.IO) {
             try {
                 val list = mutableListOf<AppItem>()
@@ -189,7 +193,9 @@ object CloudflareApi {
                                 subtitle = "Worker",
                                 domain = domain,
                                 updatedAt = o.optString("modified_on").take(19).replace("T", " ").ifBlank { "—" },
-                                isPages = false
+                                isPages = false,
+                                accountId = accountId,
+                                accountName = accountName
                             )
                         )
                     }
@@ -202,7 +208,7 @@ object CloudflareApi {
             }
         }
 
-    suspend fun getPagesProjects(email: String, apiKey: String, accountId: String): ApiResult<List<AppItem>> =
+    suspend fun getPagesProjects(email: String, apiKey: String, accountId: String, accountName: String = ""): ApiResult<List<AppItem>> =
         withContext(Dispatchers.IO) {
             try {
                 val list = mutableListOf<AppItem>()
@@ -221,7 +227,9 @@ object CloudflareApi {
                                 subtitle = "Pages",
                                 domain = subdomain,
                                 updatedAt = o.optString("created_on").take(19).replace("T", " ").ifBlank { "—" },
-                                isPages = true
+                                isPages = true,
+                                accountId = accountId,
+                                accountName = accountName
                             )
                         )
                     }
