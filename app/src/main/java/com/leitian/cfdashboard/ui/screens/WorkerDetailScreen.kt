@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.verticalScroll
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -21,9 +20,12 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.FileUpload
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -48,7 +50,8 @@ fun WorkerDetailScreen(
     viewModel: MainViewModel,
     onBack: () -> Unit
 ) {
-    var selectedTab by remember { mutableIntStateOf(0) }
+    // 已展开的二级菜单下标（tabs 的序号）。默认只展开"概述"。
+    var expandedSections by rememberSaveable { mutableStateOf(arrayListOf(0)) }
     val tabs = listOf("概述", "指标", "部署", "绑定", "Observability", "域", "Access", "设置")
 
     val accounts by viewModel.accounts.collectAsState()
@@ -209,39 +212,66 @@ fun WorkerDetailScreen(
         }
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding).background(MaterialTheme.colorScheme.background)) {
-            ScrollableTabRow(
-                selectedTabIndex = selectedTab,
-                edgePadding = 12.dp,
-                containerColor = MaterialTheme.colorScheme.surface,
-                contentColor = MaterialTheme.colorScheme.primary
+            // 二级菜单改为折叠列表，交互与首页账号折叠一致：点标题栏展开/收起，可同时展开多项。
+            Column(
+                Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 tabs.forEachIndexed { index, title ->
-                    Tab(
-                        selected = selectedTab == index,
-                        onClick = { selectedTab = index },
-                        text = {
-                            Text(title, fontSize = 13.sp, fontWeight = if (selectedTab == index) FontWeight.SemiBold else FontWeight.Normal)
+                    val expanded = index in expandedSections
+                    DetailSectionHeader(
+                        title = title,
+                        expanded = expanded,
+                        onClick = {
+                            expandedSections = ArrayList(
+                                if (expanded) expandedSections - index else expandedSections + index
+                            )
                         }
                     )
+                    if (expanded) {
+                        when (index) {
+                            0 -> OverviewTab(appName, scriptInfo, metrics, metricsLoading, metricsError, domains)
+                            1 -> MetricsTab(metrics, metricsLoading, metricsError, deployments)
+                            2 -> DeploymentsTab(deployments, deploymentsError, tabLoading, appName, viewModel)
+                            3 -> BindingsTab(scriptInfo, settingsDetail, appName, viewModel)
+                            4 -> ObservabilityTab(scriptInfo)
+                            5 -> DomainsTab(domains, domainsError, tabLoading, appName, viewModel)
+                            6 -> AccessTab(accessApps, accessError, tabLoading)
+                            7 -> SettingsTab(
+                                appName = appName,
+                                detail = settingsDetail,
+                                error = settingsError,
+                                loading = tabLoading,
+                                viewModel = viewModel,
+                                onWorkerDeleted = onBack
+                            )
+                        }
+                    }
                 }
             }
-            when (selectedTab) {
-                0 -> OverviewTab(appName, scriptInfo, metrics, metricsLoading, metricsError, domains)
-                1 -> MetricsTab(metrics, metricsLoading, metricsError, deployments)
-                2 -> DeploymentsTab(deployments, deploymentsError, tabLoading, appName, viewModel)
-                3 -> BindingsTab(scriptInfo, settingsDetail, appName, viewModel)
-                4 -> ObservabilityTab(scriptInfo)
-                5 -> DomainsTab(domains, domainsError, tabLoading, appName, viewModel)
-                6 -> AccessTab(accessApps, accessError, tabLoading)
-                7 -> SettingsTab(
-                    appName = appName,
-                    detail = settingsDetail,
-                    error = settingsError,
-                    loading = tabLoading,
-                    viewModel = viewModel,
-                    onWorkerDeleted = onBack
-                )
-            }
+        }
+    }
+}
+
+/** 二级菜单的折叠标题栏，样式与首页 AccountGroupHeader 保持一致。 */
+@Composable
+private fun DetailSectionHeader(title: String, expanded: Boolean, onClick: () -> Unit) {
+    Card(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp).clickable(onClick = onClick),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(title, Modifier.weight(1f), fontWeight = FontWeight.SemiBold, fontSize = 14.sp, maxLines = 1)
+            Icon(
+                if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                contentDescription = if (expanded) "折叠" else "展开",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
@@ -255,7 +285,7 @@ private fun OverviewTab(
     metricsError: String?,
     domains: List<DomainItem>
 ) {
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         val domain = scriptInfo?.subdomain ?: "$appName.workers.dev"
         Column(Modifier.fillMaxWidth().border(1.dp, CfColors.Border, RoundedCornerShape(8.dp)).padding(14.dp)) {
             Text(domain, color = CfColors.Link, fontWeight = FontWeight.Medium, fontSize = 14.sp)
@@ -291,7 +321,6 @@ private fun OverviewTab(
         }
         if (metricsError != null) Text(metricsError, color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
         MetricSummaryRow(metrics, metricsLoading)
-        Spacer(Modifier.height(24.dp))
     }
 }
 
@@ -315,7 +344,7 @@ private fun MetricsTab(
     metricsError: String?,
     deployments: List<DeploymentItem>
 ) {
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             Surface(shape = RoundedCornerShape(8.dp), border = androidx.compose.foundation.BorderStroke(1.dp, CfColors.Border), color = Color.White) {
                 Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -381,7 +410,6 @@ private fun MetricsTab(
                 )
             }
         }
-        Spacer(Modifier.height(24.dp))
     }
 }
 
@@ -430,54 +458,45 @@ private fun DeploymentsTab(items: List<DeploymentItem>, error: String?, loading:
         )
     }
 
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        item {
-            CfSectionTitle("可用部署") { if (loading) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp) }
-            Spacer(Modifier.height(8.dp))
-            AvailableDeploymentsTable(items)
-        }
-        item {
-            CfSectionTitle(title = "版本历史记录", subtitle = "按时间倒序显示最近的部署与配置变更，点右侧按钮可回滚。", trailing = {
-                Icon(Icons.Default.Refresh, "刷新", Modifier.size(20.dp))
-            })
-        }
-        if (error != null) item { Text(error, color = MaterialTheme.colorScheme.error, fontSize = 13.sp) }
-        if (!loading && items.isEmpty() && error == null) item { Text("暂无部署记录", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp) }
-        item {
-            CfTable {
-                items.forEachIndexed { index, d ->
-                    CfTableRow(showDivider = index != items.lastIndex) {
-                        Column(Modifier.weight(1f)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                MonoLinkText(d.versionId)
-                                if (d.isLatest) { Spacer(Modifier.width(8.dp)); StatusPill("当前") }
-                            }
-                            Spacer(Modifier.height(4.dp))
-                            Text(d.message.ifBlank { "已手动部署" }, fontSize = 12.sp, fontStyle = androidx.compose.ui.text.font.FontStyle.Italic, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                            Spacer(Modifier.height(6.dp))
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                SourceBadge(d.source)
-                                Spacer(Modifier.width(8.dp))
-                                Text("操作人 ${d.authorEmail}", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-                            }
-                            Spacer(Modifier.height(2.dp))
-                            Text(d.createdOn, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        CfSectionTitle("可用部署") { if (loading) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp) }
+        Spacer(Modifier.height(8.dp))
+        AvailableDeploymentsTable(items)
+        CfSectionTitle(title = "版本历史记录", subtitle = "按时间倒序显示最近的部署与配置变更，点右侧按钮可回滚。", trailing = {
+            Icon(Icons.Default.Refresh, "刷新", Modifier.size(20.dp))
+        })
+        if (error != null) Text(error, color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
+        if (!loading && items.isEmpty() && error == null) Text("暂无部署记录", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+        CfTable {
+            items.forEachIndexed { index, d ->
+                CfTableRow(showDivider = index != items.lastIndex) {
+                    Column(Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            MonoLinkText(d.versionId)
+                            if (d.isLatest) { Spacer(Modifier.width(8.dp)); StatusPill("当前") }
                         }
-                        if (!d.isLatest) {
-                            TextButton(onClick = { rollbackTarget = d }, enabled = deploymentWriteState !is WriteState.Loading) {
-                                Text("回滚", fontSize = 12.sp)
-                            }
+                        Spacer(Modifier.height(4.dp))
+                        Text(d.message.ifBlank { "已手动部署" }, fontSize = 12.sp, fontStyle = androidx.compose.ui.text.font.FontStyle.Italic, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        Spacer(Modifier.height(6.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            SourceBadge(d.source)
+                            Spacer(Modifier.width(8.dp))
+                            Text("操作人 ${d.authorEmail}", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                        }
+                        Spacer(Modifier.height(2.dp))
+                        Text(d.createdOn, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    if (!d.isLatest) {
+                        TextButton(onClick = { rollbackTarget = d }, enabled = deploymentWriteState !is WriteState.Loading) {
+                            Text("回滚", fontSize = 12.sp)
                         }
                     }
                 }
             }
         }
-        item { Text("显示 1-${items.size}/${items.size}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-        item {
-            CfSectionTitle("最近构建")
-            Text("此 Worker 还没有构建", Modifier.fillMaxWidth().border(1.dp, CfColors.Border, RoundedCornerShape(8.dp)).padding(16.dp), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(Modifier.height(24.dp))
-        }
+        Text("显示 1-${items.size}/${items.size}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        CfSectionTitle("最近构建")
+        Text("此 Worker 还没有构建", Modifier.fillMaxWidth().border(1.dp, CfColors.Border, RoundedCornerShape(8.dp)).padding(16.dp), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
@@ -513,33 +532,29 @@ private fun DomainsTab(items: List<DomainItem>, error: String?, loading: Boolean
         )
     }
 
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        item {
-            CfSectionTitle("域") {
-                if (loading) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                Spacer(Modifier.width(8.dp))
-                TextButton(onClick = { showAddDomain = true }) { Text("＋ 添加域名") }
-            }
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        CfSectionTitle("域") {
+            if (loading) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+            Spacer(Modifier.width(8.dp))
+            TextButton(onClick = { showAddDomain = true }) { Text("＋ 添加域名") }
         }
-        if (error != null) item { Text(error, color = MaterialTheme.colorScheme.error, fontSize = 13.sp) }
-        item {
-            CfTable(header = {
-                Text("主机名", Modifier.weight(1.4f), fontSize = 11.sp, color = CfColors.GrayText)
-                Text("环境", Modifier.weight(0.8f), fontSize = 11.sp, color = CfColors.GrayText)
-                Text("服务", Modifier.weight(1f), fontSize = 11.sp, color = CfColors.GrayText)
-                Text("", Modifier.weight(0.5f))
-            }) {
-                if (!loading && items.isEmpty() && error == null) {
-                    Text("暂无自定义域名", Modifier.padding(16.dp), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                } else {
-                    items.forEachIndexed { index, d ->
-                        CfTableRow(showDivider = index != items.lastIndex) {
-                            Text(d.hostname, Modifier.weight(1.4f), color = CfColors.Link, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text(d.environment, Modifier.weight(0.8f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text(d.service, Modifier.weight(1f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            IconButton(onClick = { deleteTarget = d }, modifier = Modifier.weight(0.5f).size(32.dp)) {
-                                Icon(Icons.Default.Delete, "删除", Modifier.size(16.dp), tint = MaterialTheme.colorScheme.error)
-                            }
+        if (error != null) Text(error, color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
+        CfTable(header = {
+            Text("主机名", Modifier.weight(1.4f), fontSize = 11.sp, color = CfColors.GrayText)
+            Text("环境", Modifier.weight(0.8f), fontSize = 11.sp, color = CfColors.GrayText)
+            Text("服务", Modifier.weight(1f), fontSize = 11.sp, color = CfColors.GrayText)
+            Text("", Modifier.weight(0.5f))
+        }) {
+            if (!loading && items.isEmpty() && error == null) {
+                Text("暂无自定义域名", Modifier.padding(16.dp), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else {
+                items.forEachIndexed { index, d ->
+                    CfTableRow(showDivider = index != items.lastIndex) {
+                        Text(d.hostname, Modifier.weight(1.4f), color = CfColors.Link, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(d.environment, Modifier.weight(0.8f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(d.service, Modifier.weight(1f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        IconButton(onClick = { deleteTarget = d }, modifier = Modifier.weight(0.5f).size(32.dp)) {
+                            Icon(Icons.Default.Delete, "删除", Modifier.size(16.dp), tint = MaterialTheme.colorScheme.error)
                         }
                     }
                 }
@@ -600,28 +615,24 @@ private fun AddDomainDialog(
 
 @Composable
 private fun AccessTab(items: List<AccessAppItem>, error: String?, loading: Boolean) {
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        item {
-            CfSectionTitle(title = "Access", subtitle = "账号级 Access Applications（不一定绑定当前 Worker）") {
-                if (loading) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-            }
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        CfSectionTitle(title = "Access", subtitle = "账号级 Access Applications（不一定绑定当前 Worker）") {
+            if (loading) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
         }
-        if (error != null) item { Text(error, color = MaterialTheme.colorScheme.error, fontSize = 13.sp) }
-        item {
-            CfTable(header = {
-                Text("名称", Modifier.weight(1.2f), fontSize = 11.sp, color = CfColors.GrayText)
-                Text("域名", Modifier.weight(1.2f), fontSize = 11.sp, color = CfColors.GrayText)
-                Text("类型", Modifier.weight(0.7f), fontSize = 11.sp, color = CfColors.GrayText)
-            }) {
-                if (!loading && items.isEmpty() && error == null) {
-                    Text("暂无 Access 应用", Modifier.padding(16.dp), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                } else {
-                    items.forEachIndexed { index, a ->
-                        CfTableRow(showDivider = index != items.lastIndex) {
-                            Text(a.name, Modifier.weight(1.2f), fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text(a.domain, Modifier.weight(1.2f), fontSize = 12.sp, color = CfColors.Link, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text(a.type, Modifier.weight(0.7f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        }
+        if (error != null) Text(error, color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
+        CfTable(header = {
+            Text("名称", Modifier.weight(1.2f), fontSize = 11.sp, color = CfColors.GrayText)
+            Text("域名", Modifier.weight(1.2f), fontSize = 11.sp, color = CfColors.GrayText)
+            Text("类型", Modifier.weight(0.7f), fontSize = 11.sp, color = CfColors.GrayText)
+        }) {
+            if (!loading && items.isEmpty() && error == null) {
+                Text("暂无 Access 应用", Modifier.padding(16.dp), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else {
+                items.forEachIndexed { index, a ->
+                    CfTableRow(showDivider = index != items.lastIndex) {
+                        Text(a.name, Modifier.weight(1.2f), fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(a.domain, Modifier.weight(1.2f), fontSize = 12.sp, color = CfColors.Link, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(a.type, Modifier.weight(0.7f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }
@@ -715,7 +726,7 @@ private fun SettingsTab(
         )
     }
 
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         CfSectionTitle("设置") { if (loading) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp) }
         if (error != null) Text(error, color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
         if (detail == null && !loading) { Text("暂无设置数据", color = MaterialTheme.colorScheme.onSurfaceVariant); return }
@@ -1008,7 +1019,6 @@ private fun SettingsTab(
             }
         }
 
-        Spacer(Modifier.height(24.dp))
     }
 }
 
@@ -1225,52 +1235,45 @@ private fun BindingsTab(scriptInfo: CloudflareApi.ScriptInfo?, settingsDetail: W
         )
     }
 
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        item {
-            CfSectionTitle(title = "绑定", subtitle = "将资源连接到此 Worker。") {
-                TextButton(onClick = { showAddBinding = true }) { Text("＋ 添加绑定") }
-            }
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        CfSectionTitle(title = "绑定", subtitle = "将资源连接到此 Worker。") {
+            TextButton(onClick = { showAddBinding = true }) { Text("＋ 添加绑定") }
         }
-        item {
-            DottedCanvasBackground(Modifier.fillMaxWidth().height(140.dp)) {
-                Row(Modifier.fillMaxSize().padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceEvenly) {
-                    TopologyNode("Worker", subtitle = scriptInfo?.subdomain?.takeIf { it.isNotBlank() } ?: "script")
-                    Canvas(Modifier.width(48.dp).height(2.dp)) {
-                        drawLine(CfColors.NodeBorder, Offset(0f, size.height / 2), Offset(size.width, size.height / 2), 2f)
-                    }
-                    TopologyNode(
-                        if (bindings.isEmpty()) "无绑定" else bindings.first().type,
-                        subtitle = if (bindings.isEmpty()) null else bindings.first().name,
-                        badge = if (bindings.isEmpty()) null else bindings.size.toString()
-                    )
+        DottedCanvasBackground(Modifier.fillMaxWidth().height(140.dp)) {
+            Row(Modifier.fillMaxSize().padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceEvenly) {
+                TopologyNode("Worker", subtitle = scriptInfo?.subdomain?.takeIf { it.isNotBlank() } ?: "script")
+                Canvas(Modifier.width(48.dp).height(2.dp)) {
+                    drawLine(CfColors.NodeBorder, Offset(0f, size.height / 2), Offset(size.width, size.height / 2), 2f)
                 }
+                TopologyNode(
+                    if (bindings.isEmpty()) "无绑定" else bindings.first().type,
+                    subtitle = if (bindings.isEmpty()) null else bindings.first().name,
+                    badge = if (bindings.isEmpty()) null else bindings.size.toString()
+                )
             }
         }
-        item {
-            CfSectionTitle("已连接绑定")
-            CfTable(header = {
-                Text("类型", Modifier.weight(0.9f), fontSize = 11.sp, color = CfColors.GrayText)
-                Text("名称", Modifier.weight(1f), fontSize = 11.sp, color = CfColors.GrayText)
-                Text("值", Modifier.weight(1.2f), fontSize = 11.sp, color = CfColors.GrayText)
-                Text("", Modifier.weight(0.4f))
-            }) {
-                if (bindings.isEmpty()) {
-                    Text("暂无绑定", Modifier.padding(16.dp), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                } else {
-                    bindings.forEachIndexed { index, b ->
-                        CfTableRow(showDivider = index != bindings.lastIndex) {
-                            Text(b.type, Modifier.weight(0.9f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text(b.name, Modifier.weight(1f), fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text(b.detail.ifBlank { "—" }, Modifier.weight(1.2f), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            IconButton(onClick = { deleteTarget = b.name }, modifier = Modifier.weight(0.4f).size(32.dp)) {
-                                Icon(Icons.Default.Delete, "删除", Modifier.size(16.dp), tint = MaterialTheme.colorScheme.error)
-                            }
+        CfSectionTitle("已连接绑定")
+        CfTable(header = {
+            Text("类型", Modifier.weight(0.9f), fontSize = 11.sp, color = CfColors.GrayText)
+            Text("名称", Modifier.weight(1f), fontSize = 11.sp, color = CfColors.GrayText)
+            Text("值", Modifier.weight(1.2f), fontSize = 11.sp, color = CfColors.GrayText)
+            Text("", Modifier.weight(0.4f))
+        }) {
+            if (bindings.isEmpty()) {
+                Text("暂无绑定", Modifier.padding(16.dp), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else {
+                bindings.forEachIndexed { index, b ->
+                    CfTableRow(showDivider = index != bindings.lastIndex) {
+                        Text(b.type, Modifier.weight(0.9f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(b.name, Modifier.weight(1f), fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(b.detail.ifBlank { "—" }, Modifier.weight(1.2f), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        IconButton(onClick = { deleteTarget = b.name }, modifier = Modifier.weight(0.4f).size(32.dp)) {
+                            Icon(Icons.Default.Delete, "删除", Modifier.size(16.dp), tint = MaterialTheme.colorScheme.error)
                         }
                     }
                 }
             }
         }
-        item { Spacer(Modifier.height(24.dp)) }
     }
 }
 
@@ -1376,7 +1379,7 @@ private fun AddBindingDialog(
 
 @Composable
 private fun ObservabilityTab(scriptInfo: CloudflareApi.ScriptInfo?) {
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         CfSectionTitle("Observability")
         CfTable {
             CfTableRow {
@@ -1388,6 +1391,5 @@ private fun ObservabilityTab(scriptInfo: CloudflareApi.ScriptInfo?) {
                 StatusPill(if (scriptInfo?.tracesEnabled == true) "已启用" else "未启用", active = scriptInfo?.tracesEnabled == true)
             }
         }
-        Spacer(Modifier.height(24.dp))
     }
 }
