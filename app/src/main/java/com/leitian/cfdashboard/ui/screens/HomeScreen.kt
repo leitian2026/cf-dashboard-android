@@ -10,13 +10,18 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Logout
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -27,6 +32,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.leitian.cfdashboard.data.CloudflareApi
 import com.leitian.cfdashboard.data.NetworkLogging
+import com.leitian.cfdashboard.data.SavedAccount
 import com.leitian.cfdashboard.ui.viewmodel.MainViewModel
 import kotlinx.coroutines.launch
 
@@ -34,19 +40,28 @@ import kotlinx.coroutines.launch
 @Composable
 fun HomeScreen(
     viewModel: MainViewModel,
-    onAppClick: (String, String, Boolean) -> Unit,
+    onAppClick: (accountId: String, appId: String, appName: String, isPages: Boolean) -> Unit,
+    onAddAccount: () -> Unit,
     onLogout: () -> Unit
 ) {
     val apps by viewModel.apps.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
-    val stats by viewModel.accountStats.collectAsState()
-    val statsError by viewModel.accountStatsError.collectAsState()
+    val statsByAccount by viewModel.accountStatsByAccount.collectAsState()
+    val statsErrorByAccount by viewModel.accountStatsErrorByAccount.collectAsState()
     val createLoading by viewModel.createLoading.collectAsState()
     val createError by viewModel.createError.collectAsState()
+    val accounts by viewModel.accounts.collectAsState()
+    // 只登录了一个账号时，界面上不需要额外的账号标签/选择器，保持原来单账号时的简洁样子。
+    val multiAccount = accounts.size > 1
 
     var searchQuery by remember { mutableStateOf("") }
     var showCreateDialog by remember { mutableStateOf(false) }
     var newWorkerName by remember { mutableStateOf("") }
+    var showAccountsMenu by remember { mutableStateOf(false) }
+    var createAccountMenuExpanded by remember { mutableStateOf(false) }
+    var selectedCreateAccountId by remember { mutableStateOf("") }
+    // 已折叠的账号 id。用 rememberSaveable：进详情页再返回、旋转屏幕后折叠状态还在。
+    var collapsedAccountIds by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
 
     // 网络请求详细日志开关：默认关闭，遇到问题时手动打开，用完记得关掉
     // （响应体里可能带账户信息，别一直开着）。
@@ -64,10 +79,14 @@ fun HomeScreen(
             else apps.filter {
                 it.name.contains(searchQuery, true) ||
                     it.subtitle.contains(searchQuery, true) ||
-                    it.domain.contains(searchQuery, true)
+                    it.domain.contains(searchQuery, true) ||
+                    it.accountName.contains(searchQuery, true)
             }
         }
     }
+
+    // 按账号分组（分组内保持原有顺序），组的顺序跟随已登录账号的顺序。
+    val groupedApps = remember(filtered) { filtered.groupBy { it.accountId } }
 
     if (showCreateDialog) {
         AlertDialog(
@@ -81,6 +100,35 @@ fun HomeScreen(
             title = { Text("创建 Worker") },
             text = {
                 Column {
+                    if (multiAccount) {
+                        val selectedAccount = accounts.find { it.accountId == selectedCreateAccountId } ?: accounts.firstOrNull()
+                        Text("创建到账号", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(Modifier.height(4.dp))
+                        Box {
+                            OutlinedButton(
+                                onClick = { createAccountMenuExpanded = true },
+                                enabled = !createLoading,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    selectedAccount?.accountName?.takeIf { it.isNotBlank() } ?: selectedAccount?.email ?: "选择账号",
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                            DropdownMenu(expanded = createAccountMenuExpanded, onDismissRequest = { createAccountMenuExpanded = false }) {
+                                accounts.forEach { acc ->
+                                    DropdownMenuItem(
+                                        text = { Text(acc.accountName.ifBlank { acc.email }, fontSize = 13.sp) },
+                                        onClick = {
+                                            selectedCreateAccountId = acc.accountId
+                                            createAccountMenuExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                        Spacer(Modifier.height(12.dp))
+                    }
                     OutlinedTextField(
                         value = newWorkerName,
                         onValueChange = { newWorkerName = it },
@@ -105,13 +153,14 @@ fun HomeScreen(
             confirmButton = {
                 Button(
                     onClick = {
-                        viewModel.createWorker(newWorkerName) {
+                        val accId = selectedCreateAccountId.ifBlank { accounts.firstOrNull()?.accountId ?: "" }
+                        viewModel.createWorker(accId, newWorkerName) {
                             showCreateDialog = false
                             newWorkerName = ""
                             viewModel.clearCreateError()
                         }
                     },
-                    enabled = !createLoading && newWorkerName.isNotBlank()
+                    enabled = !createLoading && newWorkerName.isNotBlank() && accounts.isNotEmpty()
                 ) {
                     if (createLoading) {
                         CircularProgressIndicator(
@@ -154,6 +203,52 @@ fun HomeScreen(
                 },
                 actions = {
                     Box {
+                        IconButton(onClick = { showAccountsMenu = true }) {
+                            Icon(
+                                Icons.Default.Person,
+                                contentDescription = "账号",
+                                tint = if (multiAccount) MaterialTheme.colorScheme.primary
+                                       else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        DropdownMenu(expanded = showAccountsMenu, onDismissRequest = { showAccountsMenu = false }) {
+                            Text(
+                                "已登录账号",
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            accounts.forEach { acc ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.width(220.dp)
+                                        ) {
+                                            Column(Modifier.weight(1f)) {
+                                                Text(acc.accountName.ifBlank { acc.email }, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                                                Text(acc.email, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                            }
+                                            IconButton(
+                                                onClick = { viewModel.removeAccount(acc.accountId) },
+                                                modifier = Modifier.size(28.dp)
+                                            ) {
+                                                Icon(Icons.Default.Close, contentDescription = "移除账号", modifier = Modifier.size(16.dp))
+                                            }
+                                        }
+                                    },
+                                    onClick = {}
+                                )
+                            }
+                            HorizontalDivider()
+                            DropdownMenuItem(
+                                text = { Text("添加账号") },
+                                leadingIcon = { Icon(Icons.Default.Add, null) },
+                                onClick = { showAccountsMenu = false; onAddAccount() }
+                            )
+                        }
+                    }
+                    Box {
                         IconButton(onClick = { showDebugMenu = true }) {
                             Icon(
                                 Icons.Default.BugReport,
@@ -192,7 +287,7 @@ fun HomeScreen(
                         }
                     }
                     IconButton(onClick = onLogout) {
-                        Icon(Icons.Outlined.Logout, contentDescription = "退出")
+                        Icon(Icons.Outlined.Logout, contentDescription = "退出全部账号")
                     }
                     IconButton(
                         onClick = {
@@ -210,6 +305,7 @@ fun HomeScreen(
                     Button(
                         onClick = {
                             viewModel.clearCreateError()
+                            selectedCreateAccountId = accounts.firstOrNull()?.accountId ?: ""
                             showCreateDialog = true
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
@@ -233,22 +329,32 @@ fun HomeScreen(
             ) {
                 item { BillingCard() }
 
-                item {
-                    PeriodStats(
-                        requests = stats?.let { CloudflareApi.formatCount(it.requests) } ?: "—",
-                        cpu = stats?.let { CloudflareApi.formatCpu(it.cpuTimeMs) } ?: "—",
-                        errors = stats?.errors?.toString() ?: "—",
-                        workersCount = apps.count { !it.isPages }.toString()
-                    )
-                }
-
-                if (statsError != null) {
-                    item {
-                        Text(
-                            "统计提示: $statsError",
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.error
+                items(accounts, key = { "stats:${it.accountId}" }) { acc ->
+                    val accStats = statsByAccount[acc.accountId]
+                    val accError = statsErrorByAccount[acc.accountId]
+                    Column {
+                        if (multiAccount) {
+                            Text(
+                                acc.accountName.ifBlank { acc.email },
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.padding(bottom = 8.dp)
+                            )
+                        }
+                        PeriodStats(
+                            requests = accStats?.let { CloudflareApi.formatCount(it.requests) } ?: "—",
+                            cpu = accStats?.let { CloudflareApi.formatCpu(it.cpuTimeMs) } ?: "—",
+                            errors = accStats?.errors?.toString() ?: "—",
+                            workersCount = apps.count { !it.isPages && it.accountId == acc.accountId }.toString()
                         )
+                        if (accError != null) {
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                "统计提示: $accError",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
                     }
                 }
 
@@ -278,18 +384,105 @@ fun HomeScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                } else {
-                    items(filtered, key = { it.id }) { app ->
+                } else if (!multiAccount) {
+                    // 单账号：不需要分组标题，保持原来的简洁列表。
+                    items(filtered, key = { "${it.accountId}:${it.id}:${it.isPages}" }) { app ->
                         AppListItem(
                             app = app,
-                            onClick = { onAppClick(app.id, app.name, app.isPages) }
+                            onClick = { onAppClick(app.accountId, app.id, app.name, app.isPages) }
                         )
+                    }
+                } else {
+                    val searching = searchQuery.isNotBlank()
+                    accounts.forEach { acc ->
+                        val groupApps = groupedApps[acc.accountId].orEmpty()
+                        // 搜索时只显示有匹配结果的账号，并强制展开，避免命中的结果被折叠藏起来。
+                        if (searching && groupApps.isEmpty()) return@forEach
+                        val expanded = searching || acc.accountId !in collapsedAccountIds
+
+                        item(key = "group:${acc.accountId}") {
+                            AccountGroupHeader(
+                                name = acc.accountName.ifBlank { acc.email },
+                                email = acc.email,
+                                count = groupApps.size,
+                                expanded = expanded,
+                                toggleEnabled = !searching,
+                                onClick = {
+                                    collapsedAccountIds = ArrayList(
+                                        if (acc.accountId in collapsedAccountIds) collapsedAccountIds - acc.accountId
+                                        else collapsedAccountIds + acc.accountId
+                                    )
+                                }
+                            )
+                        }
+                        if (expanded) {
+                            if (groupApps.isEmpty()) {
+                                item(key = "empty:${acc.accountId}") {
+                                    Text(
+                                        "暂无 Workers 或 Pages",
+                                        Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                                        fontSize = 13.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            } else {
+                                items(groupApps, key = { "${it.accountId}:${it.id}:${it.isPages}" }) { app ->
+                                    AppListItem(
+                                        app = app,
+                                        onClick = { onAppClick(app.accountId, app.id, app.name, app.isPages) }
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }
             if (isLoading && apps.isNotEmpty()) {
                 LinearProgressIndicator(Modifier.fillMaxWidth())
             }
+        }
+    }
+}
+
+@Composable
+private fun AccountGroupHeader(
+    name: String,
+    email: String,
+    count: Int,
+    expanded: Boolean,
+    toggleEnabled: Boolean,
+    onClick: () -> Unit
+) {
+    Card(
+        Modifier.fillMaxWidth().clickable(enabled = toggleEnabled, onClick = onClick),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                Icons.Default.Person,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text(name, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, maxLines = 1)
+                if (email.isNotBlank() && email != name) {
+                    Text(email, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                }
+            }
+            Text("$count 个", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.width(4.dp))
+            Icon(
+                if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                contentDescription = if (expanded) "折叠" else "展开",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }

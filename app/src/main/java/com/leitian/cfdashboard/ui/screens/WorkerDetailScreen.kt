@@ -44,11 +44,17 @@ fun WorkerDetailScreen(
     appId: String,
     appName: String,
     isPages: Boolean = false,
+    accountId: String,
     viewModel: MainViewModel,
     onBack: () -> Unit
 ) {
     var selectedTab by remember { mutableIntStateOf(0) }
     val tabs = listOf("概述", "指标", "部署", "绑定", "Observability", "域", "Access", "设置")
+
+    val accounts by viewModel.accounts.collectAsState()
+    val accountName = remember(accounts, accountId) {
+        accounts.find { it.accountId == accountId }?.accountName?.takeIf { it.isNotBlank() }
+    }
 
     val metrics by viewModel.metrics.collectAsState()
     val scriptInfo by viewModel.scriptInfo.collectAsState()
@@ -91,7 +97,7 @@ fun WorkerDetailScreen(
         if (ready != null) saveLocationPicker.launch(ready.fileName)
     }
 
-    LaunchedEffect(appName) { viewModel.loadDetail(appName) }
+    LaunchedEffect(appName, accountId) { viewModel.loadDetail(appName, isPages, accountId) }
     DisposableEffect(Unit) { onDispose { viewModel.clearDetail() } }
 
     if (uploadState is MainViewModel.UploadState.Selected) {
@@ -168,7 +174,14 @@ fun WorkerDetailScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(appName, fontWeight = FontWeight.Bold, fontSize = 18.sp) },
+                title = {
+                    Column {
+                        Text(appName, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                        if (accountName != null) {
+                            Text(accountName, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回")

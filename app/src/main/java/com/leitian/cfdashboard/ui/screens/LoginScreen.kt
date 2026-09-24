@@ -23,18 +23,17 @@ import com.leitian.cfdashboard.ui.viewmodel.MainViewModel
 @Composable
 fun LoginScreen(
     viewModel: MainViewModel,
-    onLoginSuccess: () -> Unit
+    onLoginSuccess: () -> Unit,
+    // 非空时表示这是"追加账号"流程（从首页跳过来），而不是冷启动时的第一次登录——
+    // 界面文案和是否显示"取消"按钮都靠这个区分。
+    onCancel: (() -> Unit)? = null
 ) {
+    val isAddingAccount = onCancel != null
     var email by remember { mutableStateOf("") }
     var apiKey by remember { mutableStateOf("") }
     var showKey by remember { mutableStateOf(false) }
     val isLoading by viewModel.isLoading.collectAsState()
     val error by viewModel.loginError.collectAsState()
-    val isLoggedIn by viewModel.isLoggedIn.collectAsState()
-
-    LaunchedEffect(isLoggedIn) {
-        if (isLoggedIn == true) onLoginSuccess()
-    }
 
     Column(
         modifier = Modifier
@@ -45,14 +44,15 @@ fun LoginScreen(
         verticalArrangement = Arrangement.Center
     ) {
         Text(
-            text = "Workers 和 Pages",
+            text = if (isAddingAccount) "添加账号" else "Workers 和 Pages",
             fontSize = 28.sp,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.primary
         )
         Spacer(Modifier.height(8.dp))
         Text(
-            text = "使用 Global API Key 登录",
+            text = if (isAddingAccount) "登录另一个 Cloudflare 账号，添加后会和已登录的账号一起显示"
+                   else "使用 Global API Key 登录",
             fontSize = 14.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -100,7 +100,9 @@ fun LoginScreen(
         Spacer(Modifier.height(24.dp))
 
         Button(
-            onClick = { viewModel.login(email, apiKey) },
+            onClick = {
+                viewModel.addAccount(email, apiKey) { success -> if (success) onLoginSuccess() }
+            },
             modifier = Modifier.fillMaxWidth().height(50.dp),
             enabled = !isLoading && email.isNotBlank() && apiKey.isNotBlank(),
             shape = RoundedCornerShape(12.dp)
@@ -112,7 +114,14 @@ fun LoginScreen(
                     strokeWidth = 2.dp
                 )
             } else {
-                Text("登录", fontSize = 16.sp)
+                Text(if (isAddingAccount) "添加" else "登录", fontSize = 16.sp)
+            }
+        }
+
+        if (isAddingAccount) {
+            Spacer(Modifier.height(12.dp))
+            TextButton(onClick = { onCancel?.invoke() }, enabled = !isLoading) {
+                Text("取消")
             }
         }
 
