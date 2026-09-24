@@ -13,16 +13,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
-import androidx.navigation.navArgument
 import com.leitian.cfdashboard.data.NetworkLogging
 import com.leitian.cfdashboard.data.TokenStore
 import com.leitian.cfdashboard.ui.screens.HomeScreen
 import com.leitian.cfdashboard.ui.screens.LoginScreen
-import com.leitian.cfdashboard.ui.screens.WorkerDetailScreen
 import com.leitian.cfdashboard.ui.viewmodel.MainViewModel
 import com.leitian.cfdashboard.ui.viewmodel.MainViewModelFactory
 
@@ -76,9 +73,6 @@ fun AppNavigation() {
         composable("home") {
             HomeScreen(
                 viewModel = viewModel,
-                onAppClick = { accountId, id, name, isPages ->
-                    navController.navigate("detail/$accountId/$id/$name/$isPages")
-                },
                 onAddAccount = { navController.navigate("login_add") },
                 onLogout = {
                     viewModel.logout()
@@ -86,28 +80,6 @@ fun AppNavigation() {
                         popUpTo("home") { inclusive = true }
                     }
                 }
-            )
-        }
-        composable(
-            route = "detail/{accountId}/{appId}/{appName}/{isPages}",
-            arguments = listOf(
-                navArgument("accountId") { type = NavType.StringType },
-                navArgument("appId") { type = NavType.StringType },
-                navArgument("appName") { type = NavType.StringType },
-                navArgument("isPages") { type = NavType.BoolType }
-            )
-        ) { entry ->
-            val accountId = entry.arguments?.getString("accountId") ?: ""
-            val appId = entry.arguments?.getString("appId") ?: ""
-            val appName = entry.arguments?.getString("appName") ?: ""
-            val isPages = entry.arguments?.getBoolean("isPages") ?: false
-            WorkerDetailScreen(
-                appId = appId,
-                appName = appName,
-                isPages = isPages,
-                accountId = accountId,
-                viewModel = viewModel,
-                onBack = { navController.popBackStack() }
             )
         }
     }
