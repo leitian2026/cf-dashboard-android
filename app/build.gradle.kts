@@ -16,8 +16,23 @@ android {
         versionName = "1.0"
     }
 
+    // 固定签名：debug / release 都用仓库里的同一个 keystore，
+    // 这样 GitHub Actions 每次构建出的 APK 签名一致，可直接覆盖安装升级。
+    signingConfigs {
+        create("fixed") {
+            storeFile = file("keystore/cf-dashboard.p12")
+            storePassword = "cfdashboard123"
+            keyAlias = "cfdashboard"
+            keyPassword = "cfdashboard123"
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("fixed")
+        }
         release {
+            signingConfig = signingConfigs.getByName("fixed")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
