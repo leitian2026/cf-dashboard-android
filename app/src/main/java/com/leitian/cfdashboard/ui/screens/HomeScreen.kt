@@ -13,7 +13,6 @@ import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
@@ -41,7 +40,6 @@ import kotlinx.coroutines.launch
 @Composable
 fun HomeScreen(
     viewModel: MainViewModel,
-    onAppClick: (accountId: String, appId: String, appName: String, isPages: Boolean) -> Unit,
     onAddAccount: () -> Unit,
     onLogout: () -> Unit
 ) {
@@ -78,6 +76,9 @@ fun HomeScreen(
     val tokenStore = remember { TokenStore(context) }
     var collapsedAccountIds by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
     var collapsedLoaded by rememberSaveable { mutableStateOf(false) }
+    // 当前展开详情的 Worker（同一时间只展开一个，跟点击进详情页一次只能看一个是一样的效果）。
+    // 展开/收起都是原地进行，不再跳转到别的页面。
+    var expandedAppKey by rememberSaveable { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) {
         if (!collapsedLoaded) {
             collapsedAccountIds = ArrayList(tokenStore.getCollapsedAccountIds())
@@ -399,9 +400,13 @@ fun HomeScreen(
                 } else if (!multiAccount) {
                     // 单账号：不需要分组标题，保持原来的简洁列表。
                     items(filtered, key = { "${it.accountId}:${it.id}:${it.isPages}" }) { app ->
-                        AppListItem(
+                        val key = "${app.accountId}:${app.id}:${app.isPages}"
+                        AppRow(
                             app = app,
-                            onClick = { onAppClick(app.accountId, app.id, app.name, app.isPages) }
+                            expanded = expandedAppKey == key,
+                            onToggle = { expandedAppKey = if (expandedAppKey == key) null else key },
+                            onCollapse = { expandedAppKey = null },
+                            viewModel = viewModel
                         )
                     }
                 } else {
@@ -441,9 +446,13 @@ fun HomeScreen(
                                 }
                             } else {
                                 items(groupApps, key = { "${it.accountId}:${it.id}:${it.isPages}" }) { app ->
-                                    AppListItem(
+                                    val key = "${app.accountId}:${app.id}:${app.isPages}"
+                                    AppRow(
                                         app = app,
-                                        onClick = { onAppClick(app.accountId, app.id, app.name, app.isPages) }
+                                        expanded = expandedAppKey == key,
+                                        onToggle = { expandedAppKey = if (expandedAppKey == key) null else key },
+                                        onCollapse = { expandedAppKey = null },
+                                        viewModel = viewModel
                                     )
                                 }
                             }
@@ -568,8 +577,41 @@ private fun StatCard(title: String, value: String, modifier: Modifier = Modifier
     }
 }
 
+/**
+ * 一个 Worker/Pages 条目 + 它展开时的详情内容。跟账号折叠一样：点条目原地展开/收起，
+ * 不跳转到新页面；展开的排版是标签栏 + 可左右划动的内容（见 WorkerDetailContent）。
+ */
 @Composable
-private fun AppListItem(app: CloudflareApi.AppItem, onClick: () -> Unit) {
+private fun AppRow(
+    app: CloudflareApi.AppItem,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    onCollapse: () -> Unit,
+    viewModel: MainViewModel
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        AppListItem(app = app, expanded = expanded, onClick = onToggle)
+        if (expanded) {
+            Card(
+                Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+            ) {
+                WorkerDetailContent(
+                    appName = app.name,
+                    isPages = app.isPages,
+                    accountId = app.accountId,
+                    viewModel = viewModel,
+                    onWorkerDeleted = onCollapse
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AppListItem(app: CloudflareApi.AppItem, expanded: Boolean, onClick: () -> Unit) {
     Card(
         Modifier.fillMaxWidth().clickable(onClick = onClick),
         shape = RoundedCornerShape(12.dp),
@@ -592,12 +634,12 @@ private fun AppListItem(app: CloudflareApi.AppItem, onClick: () -> Unit) {
                 Text(app.subtitle, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Text(app.updatedAt, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            IconButton(onClick = {}) {
-                Icon(Icons.Default.MoreVert, "更多", tint = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
-        Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 12.dp)) {
-            Text("查看部署 ↗", fontSize = 13.sp, color = MaterialTheme.colorScheme.secondary)
+            Spacer(Modifier.width(4.dp))
+            Icon(
+                if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                contentDescription = if (expanded) "折叠" else "展开",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }

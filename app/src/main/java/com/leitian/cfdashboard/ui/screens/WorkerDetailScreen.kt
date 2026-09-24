@@ -1,31 +1,29 @@
 package com.leitian.cfdashboard.ui.screens
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.FileUpload
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -39,25 +37,24 @@ import com.leitian.cfdashboard.data.*
 import com.leitian.cfdashboard.ui.components.*
 import com.leitian.cfdashboard.ui.viewmodel.MainViewModel
 import com.leitian.cfdashboard.ui.viewmodel.WriteState
+import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class)
+/**
+ * Worker 详情内容：内嵌展示在首页列表条目下方（点条目原地展开，不再跳转页面）。
+ * 顶部是可横向滑动的标签栏，下面用 HorizontalPager 承载内容——点标签或左右划都能切换。
+ */
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
-fun WorkerDetailScreen(
-    appId: String,
+fun WorkerDetailContent(
     appName: String,
     isPages: Boolean = false,
     accountId: String,
     viewModel: MainViewModel,
-    onBack: () -> Unit
+    onWorkerDeleted: () -> Unit
 ) {
-    // 已展开的二级菜单下标（tabs 的序号）。默认只展开"概述"。
-    var expandedSections by rememberSaveable { mutableStateOf(arrayListOf(0)) }
     val tabs = listOf("概述", "指标", "部署", "绑定", "Observability", "域", "Access", "设置")
-
-    val accounts by viewModel.accounts.collectAsState()
-    val accountName = remember(accounts, accountId) {
-        accounts.find { it.accountId == accountId }?.accountName?.takeIf { it.isNotBlank() }
-    }
+    val pagerState = rememberPagerState(pageCount = { tabs.size })
+    val pagerScope = rememberCoroutineScope()
 
     val metrics by viewModel.metrics.collectAsState()
     val scriptInfo by viewModel.scriptInfo.collectAsState()
@@ -174,104 +171,67 @@ fun WorkerDetailScreen(
         )
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text(appName, fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                        if (accountName != null) {
-                            Text(accountName, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回")
-                    }
-                },
-                actions = {
-                    if (uploadState is MainViewModel.UploadState.Loading || downloadState is MainViewModel.DownloadState.Loading) {
-                        CircularProgressIndicator(Modifier.size(20.dp).padding(end = 8.dp), strokeWidth = 2.dp)
-                    }
-                    IconButton(onClick = {
-                        if (isPages) showPagesUnsupported = true
-                        else filePicker.launch(arrayOf("application/javascript", "text/javascript", "text/plain"))
-                    }) {
-                        Icon(Icons.Default.FileUpload, "上传文件部署")
-                    }
-                    IconButton(onClick = {
-                        if (isPages) showPagesDownloadUnsupported = true
-                        else viewModel.downloadScript(appName)
-                    }) {
-                        Icon(Icons.Default.FileDownload, "下载代码")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
-            )
-        }
-    ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding).background(MaterialTheme.colorScheme.background)) {
-            // 二级菜单改为折叠列表，交互与首页账号折叠一致：点标题栏展开/收起，可同时展开多项。
-            Column(
-                Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                tabs.forEachIndexed { index, title ->
-                    val expanded = index in expandedSections
-                    DetailSectionHeader(
-                        title = title,
-                        expanded = expanded,
-                        onClick = {
-                            expandedSections = ArrayList(
-                                if (expanded) expandedSections - index else expandedSections + index
-                            )
-                        }
-                    )
-                    if (expanded) {
-                        when (index) {
-                            0 -> OverviewTab(appName, scriptInfo, metrics, metricsLoading, metricsError, domains)
-                            1 -> MetricsTab(metrics, metricsLoading, metricsError, deployments)
-                            2 -> DeploymentsTab(deployments, deploymentsError, tabLoading, appName, viewModel)
-                            3 -> BindingsTab(scriptInfo, settingsDetail, appName, viewModel)
-                            4 -> ObservabilityTab(scriptInfo)
-                            5 -> DomainsTab(domains, domainsError, tabLoading, appName, viewModel)
-                            6 -> AccessTab(accessApps, accessError, tabLoading)
-                            7 -> SettingsTab(
-                                appName = appName,
-                                detail = settingsDetail,
-                                error = settingsError,
-                                loading = tabLoading,
-                                viewModel = viewModel,
-                                onWorkerDeleted = onBack
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-/** 二级菜单的折叠标题栏，样式与首页 AccountGroupHeader 保持一致。 */
-@Composable
-private fun DetailSectionHeader(title: String, expanded: Boolean, onClick: () -> Unit) {
-    Card(
-        Modifier.fillMaxWidth().padding(horizontal = 16.dp).clickable(onClick = onClick),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
-    ) {
+    Column(Modifier.fillMaxWidth()) {
+        // 原顶部栏的上传/下载动作，现在放在展开区域顶部（不再有独立页面和返回箭头）。
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+            Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(title, Modifier.weight(1f), fontWeight = FontWeight.SemiBold, fontSize = 14.sp, maxLines = 1)
-            Icon(
-                if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                contentDescription = if (expanded) "折叠" else "展开",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            Spacer(Modifier.weight(1f))
+            if (uploadState is MainViewModel.UploadState.Loading || downloadState is MainViewModel.DownloadState.Loading) {
+                CircularProgressIndicator(Modifier.size(18.dp).padding(end = 8.dp), strokeWidth = 2.dp)
+            }
+            IconButton(onClick = {
+                if (isPages) showPagesUnsupported = true
+                else filePicker.launch(arrayOf("application/javascript", "text/javascript", "text/plain"))
+            }) {
+                Icon(Icons.Default.FileUpload, "上传文件部署")
+            }
+            IconButton(onClick = {
+                if (isPages) showPagesDownloadUnsupported = true
+                else viewModel.downloadScript(appName)
+            }) {
+                Icon(Icons.Default.FileDownload, "下载代码")
+            }
+        }
+
+        // 标签栏：点标签或左右划动 Pager 都能切换，两者互相联动。
+        ScrollableTabRow(
+            selectedTabIndex = pagerState.currentPage,
+            containerColor = Color.Transparent,
+            edgePadding = 16.dp,
+            divider = {}
+        ) {
+            tabs.forEachIndexed { index, title ->
+                Tab(
+                    selected = pagerState.currentPage == index,
+                    onClick = { pagerScope.launch { pagerState.animateScrollToPage(index) } },
+                    text = { Text(title, fontSize = 13.sp) }
+                )
+            }
+        }
+        HorizontalDivider(color = CfColors.Border)
+
+        HorizontalPager(state = pagerState, modifier = Modifier.fillMaxWidth()) { page ->
+            Column(Modifier.padding(vertical = 12.dp)) {
+                when (page) {
+                    0 -> OverviewTab(appName, scriptInfo, metrics, metricsLoading, metricsError, domains)
+                    1 -> MetricsTab(metrics, metricsLoading, metricsError, deployments)
+                    2 -> DeploymentsTab(deployments, deploymentsError, tabLoading, appName, viewModel)
+                    3 -> BindingsTab(scriptInfo, settingsDetail, appName, viewModel)
+                    4 -> ObservabilityTab(scriptInfo)
+                    5 -> DomainsTab(domains, domainsError, tabLoading, appName, viewModel)
+                    6 -> AccessTab(accessApps, accessError, tabLoading)
+                    7 -> SettingsTab(
+                        appName = appName,
+                        detail = settingsDetail,
+                        error = settingsError,
+                        loading = tabLoading,
+                        viewModel = viewModel,
+                        onWorkerDeleted = onWorkerDeleted
+                    )
+                }
+            }
         }
     }
 }
