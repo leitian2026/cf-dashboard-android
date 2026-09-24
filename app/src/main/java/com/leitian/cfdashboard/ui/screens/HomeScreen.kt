@@ -33,6 +33,7 @@ import androidx.compose.ui.unit.sp
 import com.leitian.cfdashboard.data.CloudflareApi
 import com.leitian.cfdashboard.data.NetworkLogging
 import com.leitian.cfdashboard.data.SavedAccount
+import com.leitian.cfdashboard.data.TokenStore
 import com.leitian.cfdashboard.ui.viewmodel.MainViewModel
 import kotlinx.coroutines.launch
 
@@ -60,8 +61,6 @@ fun HomeScreen(
     var showAccountsMenu by remember { mutableStateOf(false) }
     var createAccountMenuExpanded by remember { mutableStateOf(false) }
     var selectedCreateAccountId by remember { mutableStateOf("") }
-    // 已折叠的账号 id。用 rememberSaveable：进详情页再返回、旋转屏幕后折叠状态还在。
-    var collapsedAccountIds by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
 
     // 网络请求详细日志开关：默认关闭，遇到问题时手动打开，用完记得关掉
     // （响应体里可能带账户信息，别一直开着）。
@@ -71,6 +70,19 @@ fun HomeScreen(
     var verboseLogging by remember { mutableStateOf(NetworkLogging.enabled) }
     LaunchedEffect(Unit) {
         NetworkLogging.enabledFlow(context).collect { verboseLogging = it }
+    }
+
+    // 已折叠的账号 id。持久化到 DataStore：重启 App 后保持上次的折叠/展开状态。
+    // rememberSaveable 作为运行期的工作副本（进详情页再返回、旋转屏幕不会丢），
+    // 冷启动时只从 DataStore 读一次，之后每次点击都写回去。
+    val tokenStore = remember { TokenStore(context) }
+    var collapsedAccountIds by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
+    var collapsedLoaded by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        if (!collapsedLoaded) {
+            collapsedAccountIds = ArrayList(tokenStore.getCollapsedAccountIds())
+            collapsedLoaded = true
+        }
     }
 
     val filtered by remember(apps, searchQuery) {
@@ -408,10 +420,12 @@ fun HomeScreen(
                                 expanded = expanded,
                                 toggleEnabled = !searching,
                                 onClick = {
-                                    collapsedAccountIds = ArrayList(
+                                    val updated = ArrayList(
                                         if (acc.accountId in collapsedAccountIds) collapsedAccountIds - acc.accountId
                                         else collapsedAccountIds + acc.accountId
                                     )
+                                    collapsedAccountIds = updated
+                                    scope.launch { tokenStore.setCollapsedAccountIds(updated) }
                                 }
                             )
                         }
