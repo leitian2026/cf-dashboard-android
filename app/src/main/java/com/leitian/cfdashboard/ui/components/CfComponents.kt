@@ -113,6 +113,7 @@ fun CfSectionTitle(
 @Composable
 fun CfTable(
     modifier: Modifier = Modifier,
+    dense: Boolean = false,
     header: @Composable (RowScope.() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit
 ) {
@@ -127,7 +128,7 @@ fun CfTable(
                 Modifier
                     .fillMaxWidth()
                     .background(CfColors.HeaderBg, RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp))
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                    .padding(horizontal = 12.dp, vertical = if (dense) 6.dp else 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 content = header
             )
@@ -141,13 +142,14 @@ fun CfTable(
 fun CfTableRow(
     modifier: Modifier = Modifier,
     showDivider: Boolean = true,
+    dense: Boolean = false,
     content: @Composable RowScope.() -> Unit
 ) {
     Column(modifier.fillMaxWidth()) {
         Row(
             Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 12.dp),
+                .padding(horizontal = 12.dp, vertical = if (dense) 7.dp else 12.dp),
             verticalAlignment = Alignment.CenterVertically,
             content = content
         )
