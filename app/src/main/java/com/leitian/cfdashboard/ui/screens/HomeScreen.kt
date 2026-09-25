@@ -1,7 +1,6 @@
 package com.leitian.cfdashboard.ui.screens
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -17,8 +16,13 @@ import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.outlined.Bolt
+import androidx.compose.material.icons.outlined.Dns
 import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Logout
+import androidx.compose.material.icons.outlined.SwapVert
+import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -39,9 +43,19 @@ import com.leitian.cfdashboard.data.TokenStore
 import com.leitian.cfdashboard.ui.viewmodel.MainViewModel
 import kotlinx.coroutines.launch
 
-// 统一的"紧凑行"高度：账号折叠头、统计数字框、搜索框都对齐到这个高度。
-// Worker/Pages 列表项因为要放两行文字，高度会略高于这个值，但比改动前矮很多。
+// 统一的"紧凑行"高度：账号折叠头、搜索框都对齐到这个高度。
 private val CompactRowHeight = 40.dp
+// 统计数字卡片比紧凑行略高一点，好放下图标，看起来更有 App 的质感而不是网页表格。
+private val StatCardHeight = 52.dp
+
+// 每种统计指标一个强调色，图标用小色块装饰，弱化"纯文字表格"的网页感。
+private val StatRequestsColor = Color(0xFF0F6E56)
+private val StatCpuColor = Color(0xFF534AB7)
+private val StatErrorColor = Color(0xFF993C1D)
+private val StatWorkersColor = Color(0xFF185FA5)
+
+// 卡片统一用的轻微投影，浅色主题下能和背景拉开一点层次。
+private val CardElevation = 1.5.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -210,6 +224,9 @@ fun HomeScreen(
 
     Scaffold(
         topBar = {
+          // Surface 的 shadowElevation 让顶栏跟下面的内容区分出一条真实投影，
+          // 而不是跟背景齐平的一整块网页布局。
+          Surface(shadowElevation = 3.dp, color = MaterialTheme.colorScheme.surface) {
             TopAppBar(
                 title = {
                     Column {
@@ -329,17 +346,18 @@ fun HomeScreen(
                             showCreateDialog = true
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-                        shape = RoundedCornerShape(8.dp),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                        shape = RoundedCornerShape(20.dp),
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
                     ) {
                         Icon(Icons.Default.Add, null, Modifier.size(16.dp))
                         Spacer(Modifier.width(4.dp))
-                        Text("创建", fontSize = 13.sp)
+                        Text("创建", fontSize = 13.sp, fontWeight = FontWeight.Medium)
                     }
                     Spacer(Modifier.width(8.dp))
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
             )
+          }
         }
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding).background(MaterialTheme.colorScheme.background)) {
@@ -510,20 +528,26 @@ private fun AccountGroupHeader(
 ) {
     Card(
         Modifier.fillMaxWidth().clickable(enabled = toggleEnabled, onClick = onClick),
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+        elevation = CardDefaults.cardElevation(defaultElevation = CardElevation)
     ) {
         Row(
-            Modifier.fillMaxWidth().height(CompactRowHeight).padding(horizontal = 16.dp),
+            Modifier.fillMaxWidth().height(48.dp).padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(
-                Icons.Default.Person,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(16.dp)
-            )
+            // 用首字母头像代替通用人形图标，几个账号之间更容易一眼区分。
+            Box(
+                Modifier.size(26.dp).clip(RoundedCornerShape(13.dp)).background(MaterialTheme.colorScheme.primary),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    name.take(1).uppercase(),
+                    color = MaterialTheme.colorScheme.onPrimary,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
             Spacer(Modifier.width(10.dp))
             // 名称和邮箱不同时，合并成一行显示（省略号截断），避免变成两行撑高整个框。
             Text(
@@ -534,7 +558,15 @@ private fun AccountGroupHeader(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f)
             )
-            Text("$count 个", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.width(6.dp))
+            Box(
+                Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .padding(horizontal = 8.dp, vertical = 3.dp)
+            ) {
+                Text("$count 个", fontSize = 11.sp, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.primary)
+            }
             Spacer(Modifier.width(4.dp))
             Icon(
                 if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
@@ -551,38 +583,53 @@ private fun PeriodStats(requests: String, cpu: String, errors: String, workersCo
     Column {
         Text("今日（UTC）", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 8.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            StatCard("请求", requests, Modifier.weight(1f))
-            StatCard("CPU 时间", cpu, Modifier.weight(1f))
+            StatCard(Icons.Outlined.SwapVert, StatRequestsColor, "请求", requests, Modifier.weight(1f))
+            StatCard(Icons.Outlined.Bolt, StatCpuColor, "CPU 时间", cpu, Modifier.weight(1f))
         }
         Spacer(Modifier.height(8.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            StatCard("错误", errors, Modifier.weight(1f))
-            StatCard("Workers 数量", workersCount, Modifier.weight(1f))
+            StatCard(Icons.Outlined.ErrorOutline, StatErrorColor, "错误", errors, Modifier.weight(1f))
+            StatCard(Icons.Outlined.Dns, StatWorkersColor, "Workers 数量", workersCount, Modifier.weight(1f))
         }
     }
 }
 
 @Composable
-private fun StatCard(title: String, value: String, modifier: Modifier = Modifier) {
+private fun StatCard(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    tint: Color,
+    title: String,
+    value: String,
+    modifier: Modifier = Modifier
+) {
     Card(
-        modifier.height(CompactRowHeight),
-        shape = RoundedCornerShape(10.dp),
+        modifier.height(StatCardHeight),
+        shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+        elevation = CardDefaults.cardElevation(defaultElevation = CardElevation)
     ) {
         Row(
-            Modifier.fillMaxSize().padding(horizontal = 12.dp),
+            Modifier.fillMaxSize().padding(horizontal = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(title, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
-            Spacer(Modifier.width(6.dp))
-            Text(
-                value,
-                fontWeight = FontWeight.Bold,
-                fontSize = 13.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+            Box(
+                Modifier.size(26.dp).clip(RoundedCornerShape(8.dp)).background(tint.copy(alpha = 0.12f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(icon, null, tint = tint, modifier = Modifier.size(15.dp))
+            }
+            Spacer(Modifier.width(8.dp))
+            Column(Modifier.weight(1f)) {
+                Text(title, fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(
+                    value,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 15.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    color = tint
+                )
+            }
         }
     }
 }
@@ -593,15 +640,13 @@ private fun CompactSearchField(
     onValueChange: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Box(
-        modifier
-            .fillMaxWidth()
-            .height(CompactRowHeight)
-            .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surface)
-            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(12.dp))
-            .padding(horizontal = 12.dp)
+    Surface(
+        modifier = modifier.fillMaxWidth().height(44.dp),
+        shape = RoundedCornerShape(22.dp),
+        color = MaterialTheme.colorScheme.surface,
+        shadowElevation = CardElevation
     ) {
+      Box(Modifier.fillMaxSize().padding(horizontal = 14.dp)) {
         Row(
             Modifier.fillMaxSize(),
             verticalAlignment = Alignment.CenterVertically
@@ -609,8 +654,8 @@ private fun CompactSearchField(
             Icon(
                 Icons.Default.Search,
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(16.dp)
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(18.dp)
             )
             Spacer(Modifier.width(8.dp))
             Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
@@ -634,6 +679,7 @@ private fun CompactSearchField(
                 )
             }
         }
+      }
     }
 }
 
@@ -654,9 +700,9 @@ private fun AppRow(
         if (expanded) {
             Card(
                 Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp),
+                shape = RoundedCornerShape(14.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+                elevation = CardDefaults.cardElevation(defaultElevation = CardElevation)
             ) {
                 WorkerDetailContent(
                     appName = app.name,
@@ -672,21 +718,24 @@ private fun AppRow(
 
 @Composable
 private fun AppListItem(app: CloudflareApi.AppItem, expanded: Boolean, onClick: () -> Unit) {
+    // Pages 用紫色系图标、Worker 用蓝色系图标，跟"今日"卡片一样靠颜色而不是纯文字区分类型。
+    val (icon, tint) = if (app.isPages) Icons.Outlined.Language to Color(0xFF534AB7)
+                        else Icons.Outlined.Description to Color(0xFF185FA5)
     Card(
-        Modifier.fillMaxWidth().height(CompactRowHeight).clickable(onClick = onClick),
-        shape = RoundedCornerShape(12.dp),
+        Modifier.fillMaxWidth().height(48.dp).clickable(onClick = onClick),
+        shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+        elevation = CardDefaults.cardElevation(defaultElevation = CardElevation)
     ) {
         Row(
             Modifier.fillMaxSize().padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box(
-                Modifier.size(20.dp).clip(RoundedCornerShape(5.dp)).background(Color(0xFFE8F0FE)),
+                Modifier.size(26.dp).clip(RoundedCornerShape(8.dp)).background(tint.copy(alpha = 0.12f)),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(Icons.Outlined.Description, null, tint = MaterialTheme.colorScheme.secondary, modifier = Modifier.size(13.dp))
+                Icon(icon, null, tint = tint, modifier = Modifier.size(15.dp))
             }
             Spacer(Modifier.width(10.dp))
             // 只显示 Worker/Pages 名称，跟账号折叠头一样只占一行，高度也对齐到 CompactRowHeight。
