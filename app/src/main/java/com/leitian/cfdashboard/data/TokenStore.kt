@@ -33,6 +33,8 @@ class TokenStore(private val context: Context) {
     private val ACCOUNTS_JSON = stringPreferencesKey("accounts_json")
     // 首页 Workers 列表里"已折叠"的账号 id，重启 App 后保持上次的折叠/展开状态。
     private val COLLAPSED_ACCOUNT_IDS = stringSetPreferencesKey("collapsed_account_ids")
+    // 当前展开的 Worker/Pages 条目 key（同一时间只展开一个），重启 App 后保持上次的展开状态。
+    private val EXPANDED_APP_KEY = stringPreferencesKey("expanded_app_key")
 
     /** 保留字段：第一个已登录账号的邮箱，仅用于兼容旧代码里对单一邮箱的展示需求。 */
     val emailFlow: Flow<String?> = context.dataStore.data.map { prefs ->
@@ -113,6 +115,15 @@ class TokenStore(private val context: Context) {
 
     suspend fun setCollapsedAccountIds(ids: Collection<String>) {
         context.dataStore.edit { prefs -> prefs[COLLAPSED_ACCOUNT_IDS] = ids.toSet() }
+    }
+
+    suspend fun getExpandedAppKey(): String? =
+        context.dataStore.data.first()[EXPANDED_APP_KEY]?.takeIf { it.isNotBlank() }
+
+    suspend fun setExpandedAppKey(key: String?) {
+        context.dataStore.edit { prefs ->
+            if (key.isNullOrBlank()) prefs.remove(EXPANDED_APP_KEY) else prefs[EXPANDED_APP_KEY] = key
+        }
     }
 
     suspend fun clear() {
