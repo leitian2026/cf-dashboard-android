@@ -6,6 +6,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -26,6 +27,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -45,7 +47,7 @@ import kotlinx.coroutines.launch
  * Worker 详情内容：内嵌展示在首页列表条目下方（点条目原地展开，不再跳转页面）。
  * 顶部是可横向滑动的标签栏，下面用 HorizontalPager 承载内容——点标签或左右划都能切换。
  */
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
 fun WorkerDetailContent(
     appName: String,
@@ -200,19 +202,29 @@ fun WorkerDetailContent(
             }
         }
 
-        // 标签栏：点标签或左右划动 Pager 都能切换，两者互相联动。
-        ScrollableTabRow(
-            selectedTabIndex = pagerState.currentPage,
-            containerColor = Color.Transparent,
-            edgePadding = 16.dp,
-            divider = {}
+        // 标签栏：全部标签一次性铺开显示（自动换行，不用横滑也不会被遮住），
+        // 点击或左右划动 Pager 都能切换，两者互相联动。
+        FlowRow(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             tabs.forEachIndexed { index, title ->
-                Tab(
-                    selected = pagerState.currentPage == index,
-                    onClick = { pagerScope.launch { pagerState.animateScrollToPage(index) } },
-                    text = { Text(title, fontSize = 13.sp) }
-                )
+                val selected = pagerState.currentPage == index
+                Box(
+                    Modifier
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant)
+                        .clickable { pagerScope.launch { pagerState.animateScrollToPage(index) } }
+                        .padding(horizontal = 14.dp, vertical = 8.dp)
+                ) {
+                    Text(
+                        title,
+                        fontSize = 13.sp,
+                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                        color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
         HorizontalDivider(color = CfColors.Border)

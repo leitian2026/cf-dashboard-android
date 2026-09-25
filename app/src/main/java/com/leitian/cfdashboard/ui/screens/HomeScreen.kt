@@ -98,13 +98,24 @@ fun HomeScreen(
     var collapsedAccountIds by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
     var collapsedLoaded by rememberSaveable { mutableStateOf(false) }
     // 当前展开详情的 Worker（同一时间只展开一个，跟点击进详情页一次只能看一个是一样的效果）。
-    // 展开/收起都是原地进行，不再跳转到别的页面。
+    // 展开/收起都是原地进行，不再跳转到别的页面；跟账号折叠一样持久化到 DataStore，
+    // 重启 App 后保持上次展开的那一个（如果它还在列表里）。
     var expandedAppKey by rememberSaveable { mutableStateOf<String?>(null) }
+    var expandedAppKeyLoaded by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         if (!collapsedLoaded) {
             collapsedAccountIds = ArrayList(tokenStore.getCollapsedAccountIds())
             collapsedLoaded = true
         }
+        if (!expandedAppKeyLoaded) {
+            expandedAppKey = tokenStore.getExpandedAppKey()
+            expandedAppKeyLoaded = true
+        }
+    }
+
+    fun setExpandedAppKey(key: String?) {
+        expandedAppKey = key
+        scope.launch { tokenStore.setExpandedAppKey(key) }
     }
 
     val filtered by remember(apps, searchQuery) {
@@ -454,8 +465,8 @@ fun HomeScreen(
                         AppRow(
                             app = app,
                             expanded = expandedAppKey == key,
-                            onToggle = { expandedAppKey = if (expandedAppKey == key) null else key },
-                            onCollapse = { expandedAppKey = null },
+                            onToggle = { setExpandedAppKey(if (expandedAppKey == key) null else key) },
+                            onCollapse = { setExpandedAppKey(null) },
                             viewModel = viewModel
                         )
                     }
@@ -500,8 +511,8 @@ fun HomeScreen(
                                     AppRow(
                                         app = app,
                                         expanded = expandedAppKey == key,
-                                        onToggle = { expandedAppKey = if (expandedAppKey == key) null else key },
-                                        onCollapse = { expandedAppKey = null },
+                                        onToggle = { setExpandedAppKey(if (expandedAppKey == key) null else key) },
+                                        onCollapse = { setExpandedAppKey(null) },
                                         viewModel = viewModel
                                     )
                                 }
