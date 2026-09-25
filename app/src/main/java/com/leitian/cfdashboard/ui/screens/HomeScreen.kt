@@ -102,6 +102,9 @@ fun HomeScreen(
     // 重启 App 后保持上次展开的那一个（如果它还在列表里）。
     var expandedAppKey by rememberSaveable { mutableStateOf<String?>(null) }
     var expandedAppKeyLoaded by rememberSaveable { mutableStateOf(false) }
+    // Worker 详情里停留的标签页下标，同样持久化：重启 App 后展开的那个 Worker 会停在上次看的那一页。
+    var detailTabIndex by rememberSaveable { mutableStateOf(0) }
+    var detailTabIndexLoaded by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         if (!collapsedLoaded) {
             collapsedAccountIds = ArrayList(tokenStore.getCollapsedAccountIds())
@@ -111,11 +114,20 @@ fun HomeScreen(
             expandedAppKey = tokenStore.getExpandedAppKey()
             expandedAppKeyLoaded = true
         }
+        if (!detailTabIndexLoaded) {
+            detailTabIndex = tokenStore.getDetailTabIndex()
+            detailTabIndexLoaded = true
+        }
     }
 
     fun setExpandedAppKey(key: String?) {
         expandedAppKey = key
         scope.launch { tokenStore.setExpandedAppKey(key) }
+    }
+
+    fun setDetailTabIndex(index: Int) {
+        detailTabIndex = index
+        scope.launch { tokenStore.setDetailTabIndex(index) }
     }
 
     val filtered by remember(apps, searchQuery) {
@@ -343,21 +355,15 @@ fun HomeScreen(
                             Icon(Icons.Default.Refresh, contentDescription = "刷新")
                         }
                     }
-                    Button(
+                    IconButton(
                         onClick = {
                             viewModel.clearCreateError()
                             selectedCreateAccountId = accounts.firstOrNull()?.accountId ?: ""
                             showCreateDialog = true
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-                        shape = RoundedCornerShape(20.dp),
-                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
+                        }
                     ) {
-                        Icon(Icons.Default.Add, null, Modifier.size(16.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("创建", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                        Icon(Icons.Default.Add, contentDescription = "创建", tint = MaterialTheme.colorScheme.primary)
                     }
-                    Spacer(Modifier.width(8.dp))
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
             )
@@ -454,7 +460,9 @@ fun HomeScreen(
                             expanded = expandedAppKey == key,
                             onToggle = { setExpandedAppKey(if (expandedAppKey == key) null else key) },
                             onCollapse = { setExpandedAppKey(null) },
-                            viewModel = viewModel
+                            viewModel = viewModel,
+                            initialTabIndex = detailTabIndex,
+                            onTabChanged = ::setDetailTabIndex
                         )
                     }
                 } else {
@@ -500,7 +508,9 @@ fun HomeScreen(
                                         expanded = expandedAppKey == key,
                                         onToggle = { setExpandedAppKey(if (expandedAppKey == key) null else key) },
                                         onCollapse = { setExpandedAppKey(null) },
-                                        viewModel = viewModel
+                                        viewModel = viewModel,
+                                        initialTabIndex = detailTabIndex,
+                                        onTabChanged = ::setDetailTabIndex
                                     )
                                 }
                             }
@@ -693,7 +703,9 @@ private fun AppRow(
     expanded: Boolean,
     onToggle: () -> Unit,
     onCollapse: () -> Unit,
-    viewModel: MainViewModel
+    viewModel: MainViewModel,
+    initialTabIndex: Int = 0,
+    onTabChanged: (Int) -> Unit = {}
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         AppListItem(app = app, expanded = expanded, onClick = onToggle)
@@ -709,7 +721,9 @@ private fun AppRow(
                     isPages = app.isPages,
                     accountId = app.accountId,
                     viewModel = viewModel,
-                    onWorkerDeleted = onCollapse
+                    onWorkerDeleted = onCollapse,
+                    initialTabIndex = initialTabIndex,
+                    onTabChanged = onTabChanged
                 )
             }
         }

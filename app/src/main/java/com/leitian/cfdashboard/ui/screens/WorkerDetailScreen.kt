@@ -54,11 +54,20 @@ fun WorkerDetailContent(
     isPages: Boolean = false,
     accountId: String,
     viewModel: MainViewModel,
-    onWorkerDeleted: () -> Unit
+    onWorkerDeleted: () -> Unit,
+    initialTabIndex: Int = 0,
+    onTabChanged: (Int) -> Unit = {}
 ) {
     val tabs = listOf("概述", "指标", "部署", "绑定", "Observability", "域", "Access", "设置")
-    val pagerState = rememberPagerState(pageCount = { tabs.size })
+    val pagerState = rememberPagerState(
+        initialPage = initialTabIndex.coerceIn(0, tabs.size - 1),
+        pageCount = { tabs.size }
+    )
     val pagerScope = rememberCoroutineScope()
+    // 标签页切换（点标签或左右划）都记下来，回调给外面持久化，下次重启停在同一页。
+    LaunchedEffect(pagerState) {
+        snapshotFlow { pagerState.currentPage }.collect { onTabChanged(it) }
+    }
     // 所有标签页共用的统一高度（取目前见过的最高值），配合下面 Pager 内容里的 heightIn(min=...) 使用。
     var maxPageHeightPx by remember { mutableStateOf(0) }
     val pagerHeightDensity = LocalDensity.current
