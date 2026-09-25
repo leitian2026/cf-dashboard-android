@@ -297,123 +297,123 @@ fun HomeScreen(
                         }) {
                             Icon(Icons.Default.Close, contentDescription = "关闭搜索")
                         }
-                        return@actions
-                    }
-                    IconButton(onClick = { searchActive = true }) {
-                        Icon(
-                            Icons.Default.Search,
-                            contentDescription = "搜索 Workers 和 Pages",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Box {
-                        IconButton(onClick = { showAccountsMenu = true }) {
+                    } else {
+                        IconButton(onClick = { searchActive = true }) {
                             Icon(
-                                Icons.Default.Person,
-                                contentDescription = "账号",
-                                tint = if (multiAccount) MaterialTheme.colorScheme.primary
-                                       else MaterialTheme.colorScheme.onSurfaceVariant
+                                Icons.Default.Search,
+                                contentDescription = "搜索 Workers 和 Pages",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
-                        DropdownMenu(expanded = showAccountsMenu, onDismissRequest = { showAccountsMenu = false }) {
-                            Text(
-                                "已登录账号",
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                                fontSize = 12.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            accounts.forEach { acc ->
+                        Box {
+                            IconButton(onClick = { showAccountsMenu = true }) {
+                                Icon(
+                                    Icons.Default.Person,
+                                    contentDescription = "账号",
+                                    tint = if (multiAccount) MaterialTheme.colorScheme.primary
+                                           else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            DropdownMenu(expanded = showAccountsMenu, onDismissRequest = { showAccountsMenu = false }) {
+                                Text(
+                                    "已登录账号",
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                accounts.forEach { acc ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                modifier = Modifier.width(220.dp)
+                                            ) {
+                                                Column(Modifier.weight(1f)) {
+                                                    Text(acc.accountName.ifBlank { acc.email }, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                                                    Text(acc.email, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                                }
+                                                IconButton(
+                                                    onClick = { viewModel.removeAccount(acc.accountId) },
+                                                    modifier = Modifier.size(28.dp)
+                                                ) {
+                                                    Icon(Icons.Default.Close, contentDescription = "移除账号", modifier = Modifier.size(16.dp))
+                                                }
+                                            }
+                                        },
+                                        onClick = {}
+                                    )
+                                }
+                                HorizontalDivider()
+                                DropdownMenuItem(
+                                    text = { Text("添加账号") },
+                                    leadingIcon = { Icon(Icons.Default.Add, null) },
+                                    onClick = { showAccountsMenu = false; onAddAccount() }
+                                )
+                            }
+                        }
+                        Box {
+                            IconButton(onClick = { showDebugMenu = true }) {
+                                Icon(
+                                    Icons.Default.BugReport,
+                                    contentDescription = "调试",
+                                    tint = if (verboseLogging) MaterialTheme.colorScheme.primary
+                                           else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            DropdownMenu(expanded = showDebugMenu, onDismissRequest = { showDebugMenu = false }) {
                                 DropdownMenuItem(
                                     text = {
                                         Row(
                                             verticalAlignment = Alignment.CenterVertically,
-                                            modifier = Modifier.width(220.dp)
+                                            modifier = Modifier.width(240.dp)
                                         ) {
                                             Column(Modifier.weight(1f)) {
-                                                Text(acc.accountName.ifBlank { acc.email }, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                                                Text(acc.email, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                                Text("详细网络日志", fontSize = 13.sp)
+                                                Text(
+                                                    "排查问题时打开，完整请求/响应会打到 Logcat",
+                                                    fontSize = 11.sp,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
                                             }
-                                            IconButton(
-                                                onClick = { viewModel.removeAccount(acc.accountId) },
-                                                modifier = Modifier.size(28.dp)
-                                            ) {
-                                                Icon(Icons.Default.Close, contentDescription = "移除账号", modifier = Modifier.size(16.dp))
-                                            }
+                                            Spacer(Modifier.width(8.dp))
+                                            Switch(
+                                                checked = verboseLogging,
+                                                onCheckedChange = { checked ->
+                                                    verboseLogging = checked
+                                                    scope.launch { NetworkLogging.setEnabled(context, checked) }
+                                                }
+                                            )
                                         }
                                     },
                                     onClick = {}
                                 )
                             }
-                            HorizontalDivider()
-                            DropdownMenuItem(
-                                text = { Text("添加账号") },
-                                leadingIcon = { Icon(Icons.Default.Add, null) },
-                                onClick = { showAccountsMenu = false; onAddAccount() }
-                            )
                         }
-                    }
-                    Box {
-                        IconButton(onClick = { showDebugMenu = true }) {
-                            Icon(
-                                Icons.Default.BugReport,
-                                contentDescription = "调试",
-                                tint = if (verboseLogging) MaterialTheme.colorScheme.primary
-                                       else MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                        IconButton(onClick = onLogout) {
+                            Icon(Icons.Outlined.Logout, contentDescription = "退出全部账号")
                         }
-                        DropdownMenu(expanded = showDebugMenu, onDismissRequest = { showDebugMenu = false }) {
-                            DropdownMenuItem(
-                                text = {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.width(240.dp)
-                                    ) {
-                                        Column(Modifier.weight(1f)) {
-                                            Text("详细网络日志", fontSize = 13.sp)
-                                            Text(
-                                                "排查问题时打开，完整请求/响应会打到 Logcat",
-                                                fontSize = 11.sp,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                        }
-                                        Spacer(Modifier.width(8.dp))
-                                        Switch(
-                                            checked = verboseLogging,
-                                            onCheckedChange = { checked ->
-                                                verboseLogging = checked
-                                                scope.launch { NetworkLogging.setEnabled(context, checked) }
-                                            }
-                                        )
-                                    }
-                                },
-                                onClick = {}
-                            )
+                        IconButton(
+                            onClick = {
+                                viewModel.loadApps()
+                                viewModel.loadAccountStats()
+                            },
+                            enabled = !isLoading
+                        ) {
+                            if (isLoading) {
+                                CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                            } else {
+                                Icon(Icons.Default.Refresh, contentDescription = "刷新")
+                            }
                         }
-                    }
-                    IconButton(onClick = onLogout) {
-                        Icon(Icons.Outlined.Logout, contentDescription = "退出全部账号")
-                    }
-                    IconButton(
-                        onClick = {
-                            viewModel.loadApps()
-                            viewModel.loadAccountStats()
-                        },
-                        enabled = !isLoading
-                    ) {
-                        if (isLoading) {
-                            CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                        } else {
-                            Icon(Icons.Default.Refresh, contentDescription = "刷新")
+                        IconButton(
+                            onClick = {
+                                viewModel.clearCreateError()
+                                selectedCreateAccountId = accounts.firstOrNull()?.accountId ?: ""
+                                showCreateDialog = true
+                            }
+                        ) {
+                            Icon(Icons.Default.Add, contentDescription = "创建", tint = MaterialTheme.colorScheme.primary)
                         }
-                    }
-                    IconButton(
-                        onClick = {
-                            viewModel.clearCreateError()
-                            selectedCreateAccountId = accounts.firstOrNull()?.accountId ?: ""
-                            showCreateDialog = true
-                        }
-                    ) {
-                        Icon(Icons.Default.Add, contentDescription = "创建", tint = MaterialTheme.colorScheme.primary)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
