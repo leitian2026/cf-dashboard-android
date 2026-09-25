@@ -14,15 +14,10 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import android.net.Uri
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.FileDownload
-import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Refresh
@@ -33,7 +28,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -83,211 +77,97 @@ fun WorkerDetailContent(
     val accessError by viewModel.accessError.collectAsState()
     val settingsDetail by viewModel.settingsDetail.collectAsState()
     val settingsError by viewModel.settingsError.collectAsState()
-    val uploadState by viewModel.uploadState.collectAsState()
-    val downloadState by viewModel.downloadState.collectAsState()
-
-    var showPagesUnsupported by remember { mutableStateOf(false) }
-    var showPagesDownloadUnsupported by remember { mutableStateOf(false) }
-    val context = LocalContext.current
-
-    val filePicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
-    ) { uri: Uri? ->
-        uri?.let { viewModel.onScriptSelected(it, context) }
-    }
-
-    // 下载脚本时，把内容存到用户在系统文件选择器里挑选的位置
-    val saveLocationPicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("application/javascript")
-    ) { uri: Uri? ->
-        if (uri != null) viewModel.saveDownloadedScript(uri, context)
-        else viewModel.clearDownloadState()
-    }
-
-    // 脚本下载完成（DownloadState.Ready）后，立即弹出"选择保存位置"的系统对话框
-    LaunchedEffect(downloadState) {
-        val ready = downloadState as? MainViewModel.DownloadState.Ready
-        if (ready != null) saveLocationPicker.launch(ready.fileName)
-    }
 
     LaunchedEffect(appName, accountId) { viewModel.loadDetail(appName, isPages, accountId) }
     DisposableEffect(Unit) { onDispose { viewModel.clearDetail() } }
 
-    if (uploadState is MainViewModel.UploadState.Selected) {
-        val selected = uploadState as MainViewModel.UploadState.Selected
-        AlertDialog(
-            onDismissRequest = { viewModel.clearUploadState() },
-            title = { Text("确认上传") },
-            text = { Text("确认上传 ${selected.fileName} 并部署到「$appName」吗？") },
-            confirmButton = {
-                TextButton(onClick = { viewModel.confirmUploadScript(appName, context) }) { Text("确认上传") }
-            },
-            dismissButton = {
-                TextButton(onClick = { viewModel.clearUploadState() }) { Text("取消") }
-            }
-        )
-    }
-
-    if (uploadState is MainViewModel.UploadState.Success || uploadState is MainViewModel.UploadState.Error) {
-        val isSuccess = uploadState is MainViewModel.UploadState.Success
-        val message = when (val s = uploadState) {
-            is MainViewModel.UploadState.Success -> s.message
-            is MainViewModel.UploadState.Error -> s.message
-            else -> ""
-        }
-        AlertDialog(
-            onDismissRequest = { viewModel.clearUploadState() },
-            title = { Text(if (isSuccess) "部署成功" else "部署失败") },
-            text = { Text(message) },
-            confirmButton = {
-                TextButton(onClick = { viewModel.clearUploadState() }) { Text("确定") }
-            }
-        )
-    }
-
-    if (showPagesUnsupported) {
-        AlertDialog(
-            onDismissRequest = { showPagesUnsupported = false },
-            title = { Text("暂不支持") },
-            text = { Text("Pages 项目部署流程较复杂，当前版本仅支持 Workers 单文件脚本上传。") },
-            confirmButton = {
-                TextButton(onClick = { showPagesUnsupported = false }) { Text("知道了") }
-            }
-        )
-    }
-
-    if (showPagesDownloadUnsupported) {
-        AlertDialog(
-            onDismissRequest = { showPagesDownloadUnsupported = false },
-            title = { Text("暂不支持") },
-            text = { Text("Pages 项目没有单一脚本文件，当前版本仅支持下载 Workers 的脚本代码。") },
-            confirmButton = {
-                TextButton(onClick = { showPagesDownloadUnsupported = false }) { Text("知道了") }
-            }
-        )
-    }
-
-    if (downloadState is MainViewModel.DownloadState.Success || downloadState is MainViewModel.DownloadState.Error) {
-        val isSuccess = downloadState is MainViewModel.DownloadState.Success
-        val message = when (val s = downloadState) {
-            is MainViewModel.DownloadState.Success -> s.message
-            is MainViewModel.DownloadState.Error -> s.message
-            else -> ""
-        }
-        AlertDialog(
-            onDismissRequest = { viewModel.clearDownloadState() },
-            title = { Text(if (isSuccess) "下载完成" else "下载失败") },
-            text = { Text(message) },
-            confirmButton = {
-                TextButton(onClick = { viewModel.clearDownloadState() }) { Text("确定") }
-            }
-        )
-    }
-
     Column(Modifier.fillMaxWidth()) {
-        // 原顶部栏的上传/下载动作，现在放在展开区域顶部（不再有独立页面和返回箭头）。
-        Row(
-            Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Spacer(Modifier.weight(1f))
-            if (uploadState is MainViewModel.UploadState.Loading || downloadState is MainViewModel.DownloadState.Loading) {
-                CircularProgressIndicator(Modifier.size(18.dp).padding(end = 8.dp), strokeWidth = 2.dp)
-            }
-            IconButton(onClick = {
-                if (isPages) showPagesUnsupported = true
-                else filePicker.launch(arrayOf("application/javascript", "text/javascript", "text/plain"))
-            }) {
-                Icon(Icons.Default.FileUpload, "上传文件部署")
-            }
-            IconButton(onClick = {
-                if (isPages) showPagesDownloadUnsupported = true
-                else viewModel.downloadScript(appName)
-            }) {
-                Icon(Icons.Default.FileDownload, "下载代码")
-            }
-        }
 
-        // 标签栏：竖排的手风琴列表，整体包一层浅灰底、圆角的"子面板"，
-        // 字号/图标都比外层 Worker 条目小一号，一眼能看出这是嵌在里面的下一级导航，而不是同级列表。
+        // 标签栏：竖排的手风琴列表，每一项都是独立的圆角描边卡片、彼此留出间距，
+        // 而不是共用一整块背景——这样"概述"“指标”…看上去是一条一条分开的，不是一整块面板。
+        // 配色用应用统一的浅灰卡片底 + Cloudflare 橙色高亮，不用系统默认的浅紫灰。
         // 点标题展开对应内容；再点一次已经展开的标题会收起它（可以全部收起）；
         // 点别的标题时，之前展开的那个会自动收起——同一时间最多一个展开。
         Column(
-            Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 4.dp)
-                .background(
-                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
-                    shape = RoundedCornerShape(12.dp)
-                )
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             tabs.forEachIndexed { index, title ->
                 val selected = expandedTab == index
-                Column(Modifier.fillMaxWidth()) {
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .clickable { expandedTab = if (selected) null else index }
-                            .background(
-                                if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.1f) else Color.Transparent
-                            )
-                            .padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
-                            Modifier
-                                .width(3.dp)
-                                .height(14.dp)
-                                .background(
-                                    if (selected) MaterialTheme.colorScheme.primary else Color.Transparent,
-                                    RoundedCornerShape(2.dp)
-                                )
-                        )
-                        Spacer(Modifier.width(10.dp))
-                        Text(
-                            title,
-                            fontSize = 13.sp,
-                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
-                            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.weight(1f)
-                        )
-                        Icon(
-                            if (selected) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
-                            contentDescription = if (selected) "收起" else "展开",
-                            tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(16.dp)
-                        )
-                    }
-                    if (index != tabs.lastIndex) HorizontalDivider(color = CfColors.Border.copy(alpha = 0.6f))
-                    // 展开/收起都用垂直方向的展开动画（配合淡入淡出），是在原位置逐渐撑开高度，
-                    // 而不是内容一下子整块跳出来，也不会跳转到别的地方或铺满全屏。
-                    AnimatedVisibility(
-                        visible = selected,
-                        enter = expandVertically(expandFrom = Alignment.Top) + fadeIn(),
-                        exit = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut()
-                    ) {
-                        Column(
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(10.dp),
+                    color = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.07f) else CfColors.HeaderBg,
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp,
+                        if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.4f) else CfColors.Border
+                    )
+                ) {
+                    Column(Modifier.fillMaxWidth()) {
+                        Row(
                             Modifier
                                 .fillMaxWidth()
-                                .background(MaterialTheme.colorScheme.surface)
-                                .padding(vertical = 12.dp)
+                                .clickable { expandedTab = if (selected) null else index }
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            when (index) {
-                                0 -> OverviewTab(appName, scriptInfo, metrics, metricsLoading, metricsError, domains)
-                                1 -> MetricsTab(metrics, metricsLoading, metricsError, deployments)
-                                2 -> DeploymentsTab(deployments, deploymentsError, tabLoading, appName, viewModel)
-                                3 -> BindingsTab(scriptInfo, settingsDetail, appName, viewModel)
-                                4 -> ObservabilityTab(scriptInfo)
-                                5 -> DomainsTab(domains, domainsError, tabLoading, appName, viewModel)
-                                6 -> AccessTab(accessApps, accessError, tabLoading)
-                                7 -> SettingsTab(
-                                    appName = appName,
-                                    detail = settingsDetail,
-                                    error = settingsError,
-                                    loading = tabLoading,
-                                    viewModel = viewModel,
-                                    onWorkerDeleted = onWorkerDeleted
-                                )
+                            Box(
+                                Modifier
+                                    .width(3.dp)
+                                    .height(14.dp)
+                                    .background(
+                                        if (selected) MaterialTheme.colorScheme.primary else Color.Transparent,
+                                        RoundedCornerShape(2.dp)
+                                    )
+                            )
+                            Spacer(Modifier.width(10.dp))
+                            Text(
+                                title,
+                                fontSize = 13.5.sp,
+                                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                                color = if (selected) MaterialTheme.colorScheme.primary else CfColors.GrayText,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Icon(
+                                if (selected) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                                contentDescription = if (selected) "收起" else "展开",
+                                tint = if (selected) MaterialTheme.colorScheme.primary else CfColors.GrayText,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                        // 展开/收起都用垂直方向的展开动画（配合淡入淡出），是在原位置逐渐撑开高度，
+                        // 而不是内容一下子整块跳出来，也不会跳转到别的地方或铺满全屏。
+                        AnimatedVisibility(
+                            visible = selected,
+                            enter = expandVertically(expandFrom = Alignment.Top) + fadeIn(),
+                            exit = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut()
+                        ) {
+                            Column(Modifier.fillMaxWidth()) {
+                                HorizontalDivider(color = CfColors.Border)
+                                Column(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .background(MaterialTheme.colorScheme.surface)
+                                        .padding(vertical = 12.dp)
+                                ) {
+                                    when (index) {
+                                        0 -> OverviewTab(appName, scriptInfo, metrics, metricsLoading, metricsError, domains)
+                                        1 -> MetricsTab(metrics, metricsLoading, metricsError, deployments)
+                                        2 -> DeploymentsTab(deployments, deploymentsError, tabLoading, appName, viewModel)
+                                        3 -> BindingsTab(scriptInfo, settingsDetail, appName, viewModel)
+                                        4 -> ObservabilityTab(scriptInfo)
+                                        5 -> DomainsTab(domains, domainsError, tabLoading, appName, viewModel)
+                                        6 -> AccessTab(accessApps, accessError, tabLoading)
+                                        7 -> SettingsTab(
+                                            appName = appName,
+                                            detail = settingsDetail,
+                                            error = settingsError,
+                                            loading = tabLoading,
+                                            viewModel = viewModel,
+                                            onWorkerDeleted = onWorkerDeleted
+                                        )
+                                    }
+                                }
                             }
                         }
                     }

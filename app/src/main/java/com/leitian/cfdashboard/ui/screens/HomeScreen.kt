@@ -1,5 +1,8 @@
 package com.leitian.cfdashboard.ui.screens
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -16,6 +19,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.FileDownload
+import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Person
@@ -701,7 +706,8 @@ private fun CompactSearchField(
 /**
  * 一个 Worker/Pages 条目 + 它展开时的详情内容。跟账号折叠一样：点条目原地展开/收起，
  * 不跳转到新页面，展开/收起都带一个平滑的高度动画；展开的排版是竖排的手风琴标签
- * （概述/指标/部署…，见 WorkerDetailContent）。
+ * （概述/指标/部署…，见 WorkerDetailContent）。上传/下载脚本的按钮就放在这一条折叠条上
+ * （只在展开时显示），点了之后原地弹出确认/结果对话框，不需要再进到某个标签页里找。
  */
 @Composable
 private fun AppRow(
@@ -713,8 +719,131 @@ private fun AppRow(
     initialTabIndex: Int = 0,
     onTabChanged: (Int) -> Unit = {}
 ) {
+    // 上传/下载相关的状态、系统文件选择器、确认/结果弹窗，都只在这一条"展开着"的时候才挂载——
+    // 全部 Worker 共用同一份 viewModel 状态，如果每一行都订阅，收起的那些行也会一起弹出对话框。
+    var onUploadClick: () -> Unit = {}
+    var onDownloadClick: () -> Unit = {}
+    var actionsBusy = false
+
+    if (expanded) {
+        val context = LocalContext.current
+        val uploadState by viewModel.uploadState.collectAsState()
+        val downloadState by viewModel.downloadState.collectAsState()
+        var showPagesUnsupported by remember { mutableStateOf(false) }
+        var showPagesDownloadUnsupported by remember { mutableStateOf(false) }
+
+        val filePicker = rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.OpenDocument()
+        ) { uri: Uri? ->
+            uri?.let { viewModel.onScriptSelected(it, context) }
+        }
+
+        // 下载脚本时，把内容存到用户在系统文件选择器里挑选的位置
+        val saveLocationPicker = rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.CreateDocument("application/javascript")
+        ) { uri: Uri? ->
+            if (uri != null) viewModel.saveDownloadedScript(uri, context)
+            else viewModel.clearDownloadState()
+        }
+
+        // 脚本下载完成（DownloadState.Ready）后，立即弹出"选择保存位置"的系统对话框
+        LaunchedEffect(downloadState) {
+            val ready = downloadState as? MainViewModel.DownloadState.Ready
+            if (ready != null) saveLocationPicker.launch(ready.fileName)
+        }
+
+        if (uploadState is MainViewModel.UploadState.Selected) {
+            val selected = uploadState as MainViewModel.UploadState.Selected
+            AlertDialog(
+                onDismissRequest = { viewModel.clearUploadState() },
+                title = { Text("确认上传") },
+                text = { Text("确认上传 ${selected.fileName} 并部署到「${app.name}」吗？") },
+                confirmButton = {
+                    TextButton(onClick = { viewModel.confirmUploadScript(app.name, context) }) { Text("确认上传") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { viewModel.clearUploadState() }) { Text("取消") }
+                }
+            )
+        }
+
+        if (uploadState is MainViewModel.UploadState.Success || uploadState is MainViewModel.UploadState.Error) {
+            val isSuccess = uploadState is MainViewModel.UploadState.Success
+            val message = when (val s = uploadState) {
+                is MainViewModel.UploadState.Success -> s.message
+                is MainViewModel.UploadState.Error -> s.message
+                else -> ""
+            }
+            AlertDialog(
+                onDismissRequest = { viewModel.clearUploadState() },
+                title = { Text(if (isSuccess) "部署成功" else "部署失败") },
+                text = { Text(message) },
+                confirmButton = {
+                    TextButton(onClick = { viewModel.clearUploadState() }) { Text("确定") }
+                }
+            )
+        }
+
+        if (showPagesUnsupported) {
+            AlertDialog(
+                onDismissRequest = { showPagesUnsupported = false },
+                title = { Text("暂不支持") },
+                text = { Text("Pages 项目部署流程较复杂，当前版本仅支持 Workers 单文件脚本上传。") },
+                confirmButton = {
+                    TextButton(onClick = { showPagesUnsupported = false }) { Text("知道了") }
+                }
+            )
+        }
+
+        if (showPagesDownloadUnsupported) {
+            AlertDialog(
+                onDismissRequest = { showPagesDownloadUnsupported = false },
+                title = { Text("暂不支持") },
+                text = { Text("Pages 项目没有单一脚本文件，当前版本仅支持下载 Workers 的脚本代码。") },
+                confirmButton = {
+                    TextButton(onClick = { showPagesDownloadUnsupported = false }) { Text("知道了") }
+                }
+            )
+        }
+
+        if (downloadState is MainViewModel.DownloadState.Success || downloadState is MainViewModel.DownloadState.Error) {
+            val isSuccess = downloadState is MainViewModel.DownloadState.Success
+            val message = when (val s = downloadState) {
+                is MainViewModel.DownloadState.Success -> s.message
+                is MainViewModel.DownloadState.Error -> s.message
+                else -> ""
+            }
+            AlertDialog(
+                onDismissRequest = { viewModel.clearDownloadState() },
+                title = { Text(if (isSuccess) "下载完成" else "下载失败") },
+                text = { Text(message) },
+                confirmButton = {
+                    TextButton(onClick = { viewModel.clearDownloadState() }) { Text("确定") }
+                }
+            )
+        }
+
+        onUploadClick = {
+            if (app.isPages) showPagesUnsupported = true
+            else filePicker.launch(arrayOf("application/javascript", "text/javascript", "text/plain"))
+        }
+        onDownloadClick = {
+            if (app.isPages) showPagesDownloadUnsupported = true
+            else viewModel.downloadScript(app.name)
+        }
+        actionsBusy = uploadState is MainViewModel.UploadState.Loading || downloadState is MainViewModel.DownloadState.Loading
+    }
+
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        AppListItem(app = app, expanded = expanded, onClick = onToggle)
+        AppListItem(
+            app = app,
+            expanded = expanded,
+            onClick = onToggle,
+            showActions = expanded,
+            actionsBusy = actionsBusy,
+            onUploadClick = onUploadClick,
+            onDownloadClick = onDownloadClick
+        )
         // 用展开动画代替直接 if 判断显示/隐藏：卡片是从条目下方原地、渐渐撑开高度出现的，
         // 而不是点一下就整块"跳"出来；收起时同理是慢慢收回去。
         AnimatedVisibility(
@@ -743,7 +872,15 @@ private fun AppRow(
 }
 
 @Composable
-private fun AppListItem(app: CloudflareApi.AppItem, expanded: Boolean, onClick: () -> Unit) {
+private fun AppListItem(
+    app: CloudflareApi.AppItem,
+    expanded: Boolean,
+    onClick: () -> Unit,
+    showActions: Boolean = false,
+    actionsBusy: Boolean = false,
+    onUploadClick: () -> Unit = {},
+    onDownloadClick: () -> Unit = {}
+) {
     // Pages 用紫色系图标、Worker 用蓝色系图标，跟"今日"卡片一样靠颜色而不是纯文字区分类型。
     val (icon, tint) = if (app.isPages) Icons.Outlined.Language to Color(0xFF534AB7)
                         else Icons.Outlined.Description to Color(0xFF185FA5)
@@ -773,6 +910,19 @@ private fun AppListItem(app: CloudflareApi.AppItem, expanded: Boolean, onClick: 
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f)
             )
+            // 上传/下载脚本的入口就放在这条折叠条上，只在这个 Worker 展开时才显示，
+            // 收起状态下不占地方，也不会跟一堆折叠箭头混在一起分不清是干什么用的。
+            if (showActions) {
+                if (actionsBusy) {
+                    CircularProgressIndicator(Modifier.size(16.dp).padding(end = 6.dp), strokeWidth = 2.dp)
+                }
+                IconButton(onClick = onUploadClick, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.Filled.FileUpload, contentDescription = "上传文件部署", modifier = Modifier.size(18.dp))
+                }
+                IconButton(onClick = onDownloadClick, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.Filled.FileDownload, contentDescription = "下载代码", modifier = Modifier.size(18.dp))
+                }
+            }
             Spacer(Modifier.width(4.dp))
             Icon(
                 if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
