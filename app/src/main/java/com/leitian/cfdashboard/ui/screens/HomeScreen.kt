@@ -5,7 +5,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -340,8 +339,6 @@ fun HomeScreen(
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                item { BillingCard() }
-
                 items(accounts, key = { "stats:${it.accountId}" }) { acc ->
                     val accStats = statsByAccount[acc.accountId]
                     val accError = statsErrorByAccount[acc.accountId]
@@ -483,14 +480,14 @@ private fun AccountGroupHeader(
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
                 Icons.Default.Person,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(20.dp)
+                modifier = Modifier.size(18.dp)
             )
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
@@ -506,41 +503,6 @@ private fun AccountGroupHeader(
                 contentDescription = if (expanded) "折叠" else "展开",
                 tint = MaterialTheme.colorScheme.onSurfaceVariant
             )
-        }
-    }
-}
-
-@Composable
-private fun BillingCard() {
-    Card(
-        Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
-    ) {
-        Column(Modifier.padding(16.dp)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("账单仪表板", fontWeight = FontWeight.Medium, fontSize = 14.sp)
-                Text("→", color = MaterialTheme.colorScheme.primary)
-            }
-            Spacer(Modifier.height(12.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    Modifier.size(56.dp).clip(CircleShape).background(Color(0xFFF0F0F0)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text("$0.00", fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                }
-                Spacer(Modifier.width(12.dp))
-                Column {
-                    Text("按量计费（当前周期）", fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                    Text(
-                        "账单需 Billing API，当前未接入",
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
         }
     }
 }
@@ -569,10 +531,10 @@ private fun StatCard(title: String, value: String, modifier: Modifier = Modifier
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
-        Column(Modifier.padding(12.dp)) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 7.dp)) {
             Text(title, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(Modifier.height(4.dp))
-            Text(value, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            Spacer(Modifier.height(2.dp))
+            Text(value, fontWeight = FontWeight.Bold, fontSize = 15.sp)
         }
     }
 }

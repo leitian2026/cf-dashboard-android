@@ -29,8 +29,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.leitian.cfdashboard.data.*
@@ -55,6 +57,9 @@ fun WorkerDetailContent(
     val tabs = listOf("概述", "指标", "部署", "绑定", "Observability", "域", "Access", "设置")
     val pagerState = rememberPagerState(pageCount = { tabs.size })
     val pagerScope = rememberCoroutineScope()
+    // 所有标签页共用的统一高度（取目前见过的最高值），配合下面 Pager 内容里的 heightIn(min=...) 使用。
+    var maxPageHeightPx by remember { mutableStateOf(0) }
+    val pagerHeightDensity = LocalDensity.current
 
     val metrics by viewModel.metrics.collectAsState()
     val scriptInfo by viewModel.scriptInfo.collectAsState()
@@ -212,24 +217,39 @@ fun WorkerDetailContent(
         }
         HorizontalDivider(color = CfColors.Border)
 
-        HorizontalPager(state = pagerState, modifier = Modifier.fillMaxWidth()) { page ->
-            Column(Modifier.padding(vertical = 12.dp)) {
-                when (page) {
-                    0 -> OverviewTab(appName, scriptInfo, metrics, metricsLoading, metricsError, domains)
-                    1 -> MetricsTab(metrics, metricsLoading, metricsError, deployments)
-                    2 -> DeploymentsTab(deployments, deploymentsError, tabLoading, appName, viewModel)
-                    3 -> BindingsTab(scriptInfo, settingsDetail, appName, viewModel)
-                    4 -> ObservabilityTab(scriptInfo)
-                    5 -> DomainsTab(domains, domainsError, tabLoading, appName, viewModel)
-                    6 -> AccessTab(accessApps, accessError, tabLoading)
-                    7 -> SettingsTab(
-                        appName = appName,
-                        detail = settingsDetail,
-                        error = settingsError,
-                        loading = tabLoading,
-                        viewModel = viewModel,
-                        onWorkerDeleted = onWorkerDeleted
-                    )
+        HorizontalPager(
+            state = pagerState,
+            modifier = Modifier.fillMaxWidth(),
+            beyondViewportPageCount = 1 // 预先合成相邻标签页，划动更顺，不会等到划一半才现算
+        ) { page ->
+            // 8 个标签内容高度差异很大（比如"指标"矮、"设置"很高），
+            // Pager 默认按当前页高度自适应，划动时两页高度不一致会出现一边高一边低、错位的问题。
+            // 这里记录目前见过的最高高度，统一当作所有标签的高度（只会变高不会变矮，也不会裁切内容），
+            // 划动过程中容器高度稳定，就不会再错位、也更流畅。
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = with(pagerHeightDensity) { maxPageHeightPx.toDp() })
+                    .onSizeChanged { size -> if (size.height > maxPageHeightPx) maxPageHeightPx = size.height }
+            ) {
+                Column(Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
+                    when (page) {
+                        0 -> OverviewTab(appName, scriptInfo, metrics, metricsLoading, metricsError, domains)
+                        1 -> MetricsTab(metrics, metricsLoading, metricsError, deployments)
+                        2 -> DeploymentsTab(deployments, deploymentsError, tabLoading, appName, viewModel)
+                        3 -> BindingsTab(scriptInfo, settingsDetail, appName, viewModel)
+                        4 -> ObservabilityTab(scriptInfo)
+                        5 -> DomainsTab(domains, domainsError, tabLoading, appName, viewModel)
+                        6 -> AccessTab(accessApps, accessError, tabLoading)
+                        7 -> SettingsTab(
+                            appName = appName,
+                            detail = settingsDetail,
+                            error = settingsError,
+                            loading = tabLoading,
+                            viewModel = viewModel,
+                            onWorkerDeleted = onWorkerDeleted
+                        )
+                    }
                 }
             }
         }
