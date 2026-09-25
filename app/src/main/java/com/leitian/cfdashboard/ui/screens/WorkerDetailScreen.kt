@@ -63,10 +63,11 @@ fun WorkerDetailContent(
     onTabChanged: (Int) -> Unit = {}
 ) {
     val tabs = listOf("概述", "指标", "部署", "绑定", "Observability", "域", "Access", "设置")
-    // 当前展开的标签下标（手风琴：同一时间只有一个展开）。用 appName 做 key，
-    // 切换到另一个 Worker 时重新从 initialTabIndex 开始，而不是沿用上一个 Worker 展开的下标。
-    var expandedTab by rememberSaveable(appName) { mutableStateOf(initialTabIndex.coerceIn(0, tabs.size - 1)) }
-    LaunchedEffect(expandedTab) { onTabChanged(expandedTab) }
+    // 当前展开的标签下标，null 表示全部收起。用 appName 做 key，切换到另一个 Worker 时
+    // 重新从 initialTabIndex 开始，而不是沿用上一个 Worker 展开的下标。
+    var expandedTab by rememberSaveable(appName) { mutableStateOf<Int?>(initialTabIndex.coerceIn(0, tabs.size - 1)) }
+    // 全部收起时不回调（没有"当前标签"可记），只在真的展开某一页时才记下来，下次重启还停在那一页。
+    LaunchedEffect(expandedTab) { expandedTab?.let(onTabChanged) }
 
     val metrics by viewModel.metrics.collectAsState()
     val scriptInfo by viewModel.scriptInfo.collectAsState()
@@ -207,34 +208,57 @@ fun WorkerDetailContent(
             }
         }
 
-        // 标签栏：竖排的手风琴列表，标题一个挨一个往下排。点哪个标题，内容就在它下面原地展开，
-        // 同时把之前展开的那个收起来——同一时间只有一个展开着，跟账号/Worker 条目折叠是一个逻辑。
-        Column(Modifier.fillMaxWidth()) {
+        // 标签栏：竖排的手风琴列表，整体包一层浅灰底、圆角的"子面板"，
+        // 字号/图标都比外层 Worker 条目小一号，一眼能看出这是嵌在里面的下一级导航，而不是同级列表。
+        // 点标题展开对应内容；再点一次已经展开的标题会收起它（可以全部收起）；
+        // 点别的标题时，之前展开的那个会自动收起——同一时间最多一个展开。
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 4.dp)
+                .background(
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                    shape = RoundedCornerShape(12.dp)
+                )
+        ) {
             tabs.forEachIndexed { index, title ->
                 val selected = expandedTab == index
                 Column(Modifier.fillMaxWidth()) {
                     Row(
                         Modifier
                             .fillMaxWidth()
-                            .clickable { expandedTab = index }
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                            .clickable { expandedTab = if (selected) null else index }
+                            .background(
+                                if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.1f) else Color.Transparent
+                            )
+                            .padding(horizontal = 14.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        Box(
+                            Modifier
+                                .width(3.dp)
+                                .height(14.dp)
+                                .background(
+                                    if (selected) MaterialTheme.colorScheme.primary else Color.Transparent,
+                                    RoundedCornerShape(2.dp)
+                                )
+                        )
+                        Spacer(Modifier.width(10.dp))
                         Text(
                             title,
-                            fontSize = 14.sp,
-                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                            fontSize = 13.sp,
+                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.weight(1f)
                         )
                         Icon(
                             if (selected) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
                             contentDescription = if (selected) "收起" else "展开",
                             tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(20.dp)
+                            modifier = Modifier.size(16.dp)
                         )
                     }
-                    HorizontalDivider(color = CfColors.Border)
+                    if (index != tabs.lastIndex) HorizontalDivider(color = CfColors.Border.copy(alpha = 0.6f))
                     // 展开/收起都用垂直方向的展开动画（配合淡入淡出），是在原位置逐渐撑开高度，
                     // 而不是内容一下子整块跳出来，也不会跳转到别的地方或铺满全屏。
                     AnimatedVisibility(
@@ -242,7 +266,12 @@ fun WorkerDetailContent(
                         enter = expandVertically(expandFrom = Alignment.Top) + fadeIn(),
                         exit = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut()
                     ) {
-                        Column(Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .background(MaterialTheme.colorScheme.surface)
+                                .padding(vertical = 12.dp)
+                        ) {
                             when (index) {
                                 0 -> OverviewTab(appName, scriptInfo, metrics, metricsLoading, metricsError, domains)
                                 1 -> MetricsTab(metrics, metricsLoading, metricsError, deployments)
