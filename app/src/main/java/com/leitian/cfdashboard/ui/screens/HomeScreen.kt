@@ -46,7 +46,7 @@ import kotlinx.coroutines.launch
 // 统一的"紧凑行"高度：账号折叠头、搜索框都对齐到这个高度。
 private val CompactRowHeight = 40.dp
 // 统计数字卡片比紧凑行略高一点，好放下图标，看起来更有 App 的质感而不是网页表格。
-private val StatCardHeight = 52.dp
+private val StatCardHeight = 48.dp
 
 // 每种统计指标一个强调色，图标用小色块装饰，弱化"纯文字表格"的网页感。
 private val StatRequestsColor = Color(0xFF0F6E56)
@@ -240,14 +240,7 @@ fun HomeScreen(
           Surface(shadowElevation = 3.dp, color = MaterialTheme.colorScheme.surface) {
             TopAppBar(
                 title = {
-                    Column {
-                        Text("Workers 和 Pages", fontWeight = FontWeight.Bold, fontSize = 20.sp)
-                        Text(
-                            "构建和部署无服务器功能、站点和全栈应用程序。",
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+                    Text("Workers 和 Pages", fontWeight = FontWeight.Bold, fontSize = 18.sp)
                 },
                 actions = {
                     Box {
@@ -373,8 +366,8 @@ fun HomeScreen(
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding).background(MaterialTheme.colorScheme.background)) {
             LazyColumn(
-                contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 if (multiAccount) {
                     // 多账号：所有账号的"今日"统计并排放在同一行里，各占一列，
@@ -388,15 +381,8 @@ fun HomeScreen(
                                 val accStats = statsByAccount[acc.accountId]
                                 val accError = statsErrorByAccount[acc.accountId]
                                 Column(Modifier.weight(1f)) {
-                                    Text(
-                                        acc.accountName.ifBlank { acc.email },
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.padding(bottom = 8.dp)
-                                    )
                                     PeriodStats(
+                                        header = "${acc.accountName.ifBlank { acc.email }} · 今日",
                                         requests = accStats?.let { CloudflareApi.formatCount(it.requests) } ?: "—",
                                         cpu = accStats?.let { CloudflareApi.formatCpu(it.cpuTimeMs) } ?: "—",
                                         errors = accStats?.errors?.toString() ?: "—",
@@ -420,6 +406,7 @@ fun HomeScreen(
                         val accError = statsErrorByAccount[acc.accountId]
                         Column {
                             PeriodStats(
+                                header = "今日（UTC）",
                                 requests = accStats?.let { CloudflareApi.formatCount(it.requests) } ?: "—",
                                 cpu = accStats?.let { CloudflareApi.formatCpu(it.cpuTimeMs) } ?: "—",
                                 errors = accStats?.errors?.toString() ?: "—",
@@ -590,14 +577,16 @@ private fun AccountGroupHeader(
 }
 
 @Composable
-private fun PeriodStats(requests: String, cpu: String, errors: String, workersCount: String) {
+private fun PeriodStats(header: String?, requests: String, cpu: String, errors: String, workersCount: String) {
     Column {
-        Text("今日（UTC）", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 8.dp))
+        if (header != null) {
+            Text(header, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(bottom = 6.dp))
+        }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             StatCard(Icons.Outlined.SwapVert, StatRequestsColor, "请求", requests, Modifier.weight(1f))
             StatCard(Icons.Outlined.Bolt, StatCpuColor, "CPU 时间", cpu, Modifier.weight(1f))
         }
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(6.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             StatCard(Icons.Outlined.ErrorOutline, StatErrorColor, "错误", errors, Modifier.weight(1f))
             StatCard(Icons.Outlined.Dns, StatWorkersColor, "Workers 数量", workersCount, Modifier.weight(1f))
