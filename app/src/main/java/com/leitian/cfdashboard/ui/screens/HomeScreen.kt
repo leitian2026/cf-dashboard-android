@@ -85,6 +85,8 @@ fun HomeScreen(
     val multiAccount = accounts.size > 1
 
     var searchQuery by remember { mutableStateOf("") }
+    // 搜索框放到顶栏里，跟账号登录图标同一排；点搜索图标后顶栏标题切换成输入框。
+    var searchActive by remember { mutableStateOf(false) }
     var showCreateDialog by remember { mutableStateOf(false) }
     var newWorkerName by remember { mutableStateOf("") }
     var showAccountsMenu by remember { mutableStateOf(false) }
@@ -262,9 +264,48 @@ fun HomeScreen(
           Surface(shadowElevation = 3.dp, color = MaterialTheme.colorScheme.surface) {
             TopAppBar(
                 title = {
-                    Text("Workers 和 Pages", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                    if (searchActive) {
+                        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
+                            if (searchQuery.isEmpty()) {
+                                Text(
+                                    "搜索 Workers 和 Pages",
+                                    fontSize = 16.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            BasicTextField(
+                                value = searchQuery,
+                                onValueChange = { searchQuery = it },
+                                singleLine = true,
+                                textStyle = LocalTextStyle.current.copy(
+                                    fontSize = 16.sp,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                ),
+                                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    } else {
+                        Text("Workers 和 Pages", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                    }
                 },
                 actions = {
+                    if (searchActive) {
+                        IconButton(onClick = {
+                            searchActive = false
+                            searchQuery = ""
+                        }) {
+                            Icon(Icons.Default.Close, contentDescription = "关闭搜索")
+                        }
+                        return@actions
+                    }
+                    IconButton(onClick = { searchActive = true }) {
+                        Icon(
+                            Icons.Default.Search,
+                            contentDescription = "搜索 Workers 和 Pages",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                     Box {
                         IconButton(onClick = { showAccountsMenu = true }) {
                             Icon(
@@ -440,13 +481,6 @@ fun HomeScreen(
                     }
                 }
 
-                item {
-                    CompactSearchField(
-                        value = searchQuery,
-                        onValueChange = { searchQuery = it }
-                    )
-                }
-
                 if (isLoading && apps.isEmpty()) {
                     item {
                         Box(Modifier.fillMaxWidth().padding(40.dp), contentAlignment = Alignment.Center) {
@@ -600,7 +634,7 @@ private fun AccountGroupHeader(
 private fun PeriodStats(header: String?, requests: String, cpu: String, errors: String, workersCount: String) {
     Column {
         if (header != null) {
-            Text(header, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(bottom = 6.dp))
+            Text(header, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(bottom = 6.dp))
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             StatCard(Icons.Outlined.SwapVert, StatRequestsColor, "请求", requests, Modifier.weight(1f))
@@ -640,7 +674,7 @@ private fun StatCard(
             }
             Spacer(Modifier.width(8.dp))
             Column(Modifier.weight(1f)) {
-                Text(title, fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(title, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(
                     value,
                     fontWeight = FontWeight.Bold,
@@ -651,55 +685,6 @@ private fun StatCard(
                 )
             }
         }
-    }
-}
-
-@Composable
-private fun CompactSearchField(
-    value: String,
-    onValueChange: (String) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Surface(
-        modifier = modifier.fillMaxWidth().height(44.dp),
-        shape = RoundedCornerShape(22.dp),
-        color = MaterialTheme.colorScheme.surface,
-        shadowElevation = CardElevation
-    ) {
-      Box(Modifier.fillMaxSize().padding(horizontal = 14.dp)) {
-        Row(
-            Modifier.fillMaxSize(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                Icons.Default.Search,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(18.dp)
-            )
-            Spacer(Modifier.width(8.dp))
-            Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
-                if (value.isEmpty()) {
-                    Text(
-                        "搜索应用程序",
-                        fontSize = 13.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                BasicTextField(
-                    value = value,
-                    onValueChange = onValueChange,
-                    singleLine = true,
-                    textStyle = LocalTextStyle.current.copy(
-                        fontSize = 13.sp,
-                        color = MaterialTheme.colorScheme.onSurface
-                    ),
-                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-        }
-      }
     }
 }
 
@@ -923,7 +908,7 @@ private fun AppListItem(
                     Icon(Icons.Filled.FileDownload, contentDescription = "下载代码", modifier = Modifier.size(18.dp))
                 }
             }
-            Spacer(Modifier.width(4.dp))
+            Spacer(Modifier.width(32.dp))
             Icon(
                 if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
                 contentDescription = if (expanded) "折叠" else "展开",

@@ -272,8 +272,6 @@ private fun MetricsTab(
         }
         if (metricsError != null) Text(metricsError, color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
         MetricSummaryRow(metrics, metricsLoading)
-        CfSectionTitle("可用部署")
-        AvailableDeploymentsTable(deployments, metrics, onlyCurrent = true)
         CfSectionTitle("调用次数")
         Column(Modifier.fillMaxWidth().border(1.dp, CfColors.Border, RoundedCornerShape(8.dp)).padding(12.dp)) {
             var showBar by remember { mutableStateOf(true) }
