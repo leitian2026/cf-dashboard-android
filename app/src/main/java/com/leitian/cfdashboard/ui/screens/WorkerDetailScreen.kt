@@ -362,7 +362,7 @@ private fun MetricsTab(
         if (metricsError != null) Text(metricsError, color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
         MetricSummaryRow(metrics, metricsLoading)
         CfSectionTitle("可用部署")
-        AvailableDeploymentsTable(deployments)
+        AvailableDeploymentsTable(deployments, onlyCurrent = true)
         CfSectionTitle("调用次数")
         Column(Modifier.fillMaxWidth().border(1.dp, CfColors.Border, RoundedCornerShape(8.dp)).padding(12.dp)) {
             var showBar by remember { mutableStateOf(true) }
@@ -401,7 +401,7 @@ private fun MetricsTab(
             }
             Spacer(Modifier.height(8.dp))
             if (showBar) {
-                BarChart(values = metrics?.requestPoints ?: emptyList(), modifier = Modifier.fillMaxWidth().height(180.dp))
+                BarChart(values = metrics?.requestPoints ?: emptyList(), modifier = Modifier.fillMaxWidth().height(240.dp))
             } else {
                 AreaSparkline(
                     points = metrics?.requestRatePoints ?: emptyList(),
@@ -415,16 +415,16 @@ private fun MetricsTab(
 }
 
 @Composable
-private fun AvailableDeploymentsTable(items: List<DeploymentItem>) {
+private fun AvailableDeploymentsTable(items: List<DeploymentItem>, onlyCurrent: Boolean = false) {
+    val shown = if (onlyCurrent) items.filter { it.isLatest }.ifEmpty { items.take(1) } else items.take(5)
     CfTable(header = {
         Text("版本 ID", Modifier.weight(1.2f), fontSize = 11.sp, color = CfColors.GrayText)
         Text("已部署", Modifier.weight(1.4f), fontSize = 11.sp, color = CfColors.GrayText)
         Text("流量", Modifier.weight(0.8f), fontSize = 11.sp, color = CfColors.GrayText)
     }) {
-        if (items.isEmpty()) {
+        if (shown.isEmpty()) {
             Text("暂无部署", Modifier.padding(16.dp), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         } else {
-            val shown = items.take(5)
             shown.forEachIndexed { index, d ->
                 CfTableRow(showDivider = index != shown.lastIndex) {
                     MonoLinkText(d.versionId, Modifier.weight(1.2f))
