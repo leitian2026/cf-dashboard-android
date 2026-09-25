@@ -1,5 +1,10 @@
 package com.leitian.cfdashboard.ui.screens
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -695,7 +700,8 @@ private fun CompactSearchField(
 
 /**
  * 一个 Worker/Pages 条目 + 它展开时的详情内容。跟账号折叠一样：点条目原地展开/收起，
- * 不跳转到新页面；展开的排版是标签栏 + 可左右划动的内容（见 WorkerDetailContent）。
+ * 不跳转到新页面，展开/收起都带一个平滑的高度动画；展开的排版是竖排的手风琴标签
+ * （概述/指标/部署…，见 WorkerDetailContent）。
  */
 @Composable
 private fun AppRow(
@@ -709,7 +715,13 @@ private fun AppRow(
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         AppListItem(app = app, expanded = expanded, onClick = onToggle)
-        if (expanded) {
+        // 用展开动画代替直接 if 判断显示/隐藏：卡片是从条目下方原地、渐渐撑开高度出现的，
+        // 而不是点一下就整块"跳"出来；收起时同理是慢慢收回去。
+        AnimatedVisibility(
+            visible = expanded,
+            enter = expandVertically(expandFrom = Alignment.Top) + fadeIn(),
+            exit = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut()
+        ) {
             Card(
                 Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(14.dp),

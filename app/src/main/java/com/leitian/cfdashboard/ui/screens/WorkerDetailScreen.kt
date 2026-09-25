@@ -1,16 +1,16 @@
 package com.leitian.cfdashboard.ui.screens
 
-import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -23,35 +23,35 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.FileUpload
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.leitian.cfdashboard.data.*
 import com.leitian.cfdashboard.ui.components.*
 import com.leitian.cfdashboard.ui.viewmodel.MainViewModel
 import com.leitian.cfdashboard.ui.viewmodel.WriteState
-import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.TimeZone
 
 /**
  * Worker 详情内容：内嵌展示在首页列表条目下方（点条目原地展开，不再跳转页面）。
- * 顶部是可横向滑动的标签栏，下面用 HorizontalPager 承载内容——点标签或左右划都能切换。
+ * 标签栏是竖排的手风琴列表：标题一个挨一个往下排，点开哪个标题，内容就直接在它下面原地展开，
+ * 同时收起之前展开的那个（同一时间只开一个），全程都是原地展开/收起，不会跳出去也不会全屏铺开。
  */
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WorkerDetailContent(
     appName: String,
@@ -63,20 +63,10 @@ fun WorkerDetailContent(
     onTabChanged: (Int) -> Unit = {}
 ) {
     val tabs = listOf("概述", "指标", "部署", "绑定", "Observability", "域", "Access", "设置")
-    val pagerState = rememberPagerState(
-        initialPage = initialTabIndex.coerceIn(0, tabs.size - 1),
-        pageCount = { tabs.size }
-    )
-    val pagerScope = rememberCoroutineScope()
-    // 标签页切换（点标签或左右划）都记下来，回调给外面持久化，下次重启停在同一页。
-    LaunchedEffect(pagerState) {
-        snapshotFlow { pagerState.currentPage }.collect { onTabChanged(it) }
-    }
-    // 每个标签页各自记住自己内容的高度（取该标签页见过的最高值），而不是所有标签页共用同一个最大值——
-    // 这样短的标签页（比如"域"）不会被高的标签页（比如"设置"）撑出一截空白，同时同一个标签页内部
-    // 划动时高度也还是稳定的，不会来回跳。
-    val pageHeightsPx = remember { mutableStateMapOf<Int, Int>() }
-    val pagerHeightDensity = LocalDensity.current
+    // 当前展开的标签下标（手风琴：同一时间只有一个展开）。用 appName 做 key，
+    // 切换到另一个 Worker 时重新从 initialTabIndex 开始，而不是沿用上一个 Worker 展开的下标。
+    var expandedTab by rememberSaveable(appName) { mutableStateOf(initialTabIndex.coerceIn(0, tabs.size - 1)) }
+    LaunchedEffect(expandedTab) { onTabChanged(expandedTab) }
 
     val metrics by viewModel.metrics.collectAsState()
     val scriptInfo by viewModel.scriptInfo.collectAsState()
@@ -217,87 +207,65 @@ fun WorkerDetailContent(
             }
         }
 
-        // 标签栏：全部标签一次性铺开显示（自动换行，不用横滑也不会被遮住），
-        // 点击或左右划动 Pager 都能切换，两者互相联动。
-        FlowRow(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
+        // 标签栏：竖排的手风琴列表，标题一个挨一个往下排。点哪个标题，内容就在它下面原地展开，
+        // 同时把之前展开的那个收起来——同一时间只有一个展开着，跟账号/Worker 条目折叠是一个逻辑。
+        Column(Modifier.fillMaxWidth()) {
             tabs.forEachIndexed { index, title ->
-                val selected = pagerState.currentPage == index
-                Box(
-                    Modifier
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant)
-                        .clickable { pagerScope.launch { pagerState.animateScrollToPage(index) } }
-                        .padding(horizontal = 14.dp, vertical = 8.dp)
-                ) {
-                    Text(
-                        title,
-                        fontSize = 13.sp,
-                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                        color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-        }
-        HorizontalDivider(color = CfColors.Border)
-
-        // 每个标签页只记自己内容的高度（不同标签页可以不一样），外层容器的高度跟着"当前所在的标签页"走，
-        // 并且用 animateContentSize() 让高度变化的时候是平滑过渡，而不是一下子跳过去或者跳回来。
-        val currentPageHeightPx = pageHeightsPx[pagerState.currentPage]
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .animateContentSize()
-                .then(
-                    if (currentPageHeightPx != null && currentPageHeightPx > 0) {
-                        Modifier.height(with(pagerHeightDensity) { currentPageHeightPx.toDp() })
-                    } else {
+                val selected = expandedTab == index
+                Column(Modifier.fillMaxWidth()) {
+                    Row(
                         Modifier
-                    }
-                )
-        ) {
-            HorizontalPager(
-                state = pagerState,
-                modifier = Modifier.fillMaxWidth().fillMaxHeight(),
-                beyondViewportPageCount = 1 // 预先合成相邻标签页，划动更顺，也能提前量出它的高度
-            ) { page ->
-                // wrapContentHeight(unbounded = true) 让这一页按自己内容的真实高度去测量，
-                // 不受外层容器当前高度（可能是上一个标签页留下的）限制，量出来的高度存进 pageHeightsPx，
-                // 外层容器再用这个高度做动画过渡——短的标签页不会被撑高，也不会忽高忽低。
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .wrapContentHeight(unbounded = true, align = Alignment.Top)
-                        .onSizeChanged { size ->
-                            if (size.height != (pageHeightsPx[page] ?: -1)) pageHeightsPx[page] = size.height
-                        }
-                ) {
-                    Column(Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
-                        when (page) {
-                        0 -> OverviewTab(appName, scriptInfo, metrics, metricsLoading, metricsError, domains)
-                        1 -> MetricsTab(metrics, metricsLoading, metricsError, deployments)
-                        2 -> DeploymentsTab(deployments, deploymentsError, tabLoading, appName, viewModel)
-                        3 -> BindingsTab(scriptInfo, settingsDetail, appName, viewModel)
-                        4 -> ObservabilityTab(scriptInfo)
-                        5 -> DomainsTab(domains, domainsError, tabLoading, appName, viewModel)
-                        6 -> AccessTab(accessApps, accessError, tabLoading)
-                        7 -> SettingsTab(
-                            appName = appName,
-                            detail = settingsDetail,
-                            error = settingsError,
-                            loading = tabLoading,
-                            viewModel = viewModel,
-                            onWorkerDeleted = onWorkerDeleted
+                            .fillMaxWidth()
+                            .clickable { expandedTab = index }
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            title,
+                            fontSize = 14.sp,
+                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.weight(1f)
                         )
+                        Icon(
+                            if (selected) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                            contentDescription = if (selected) "收起" else "展开",
+                            tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    HorizontalDivider(color = CfColors.Border)
+                    // 展开/收起都用垂直方向的展开动画（配合淡入淡出），是在原位置逐渐撑开高度，
+                    // 而不是内容一下子整块跳出来，也不会跳转到别的地方或铺满全屏。
+                    AnimatedVisibility(
+                        visible = selected,
+                        enter = expandVertically(expandFrom = Alignment.Top) + fadeIn(),
+                        exit = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut()
+                    ) {
+                        Column(Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
+                            when (index) {
+                                0 -> OverviewTab(appName, scriptInfo, metrics, metricsLoading, metricsError, domains)
+                                1 -> MetricsTab(metrics, metricsLoading, metricsError, deployments)
+                                2 -> DeploymentsTab(deployments, deploymentsError, tabLoading, appName, viewModel)
+                                3 -> BindingsTab(scriptInfo, settingsDetail, appName, viewModel)
+                                4 -> ObservabilityTab(scriptInfo)
+                                5 -> DomainsTab(domains, domainsError, tabLoading, appName, viewModel)
+                                6 -> AccessTab(accessApps, accessError, tabLoading)
+                                7 -> SettingsTab(
+                                    appName = appName,
+                                    detail = settingsDetail,
+                                    error = settingsError,
+                                    loading = tabLoading,
+                                    viewModel = viewModel,
+                                    onWorkerDeleted = onWorkerDeleted
+                                )
+                            }
+                        }
                     }
                 }
             }
         }
     }
-}
 }
 
 @Composable
