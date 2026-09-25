@@ -23,7 +23,6 @@ import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -53,15 +52,14 @@ fun WorkerDetailContent(
     accountId: String,
     viewModel: MainViewModel,
     onWorkerDeleted: () -> Unit,
-    initialTabIndex: Int = 0,
-    onTabChanged: (Int) -> Unit = {}
+    selectedTab: Int? = null,
+    onTabSelected: (Int?) -> Unit = {}
 ) {
     val tabs = listOf("概述", "指标", "部署", "绑定", "Observability", "域", "Access", "设置")
-    // 当前展开的标签下标，null 表示全部收起。用 appName 做 key，切换到另一个 Worker 时
-    // 重新从 initialTabIndex 开始，而不是沿用上一个 Worker 展开的下标。
-    var expandedTab by rememberSaveable(appName) { mutableStateOf<Int?>(initialTabIndex.coerceIn(0, tabs.size - 1)) }
-    // 全部收起时不回调（没有"当前标签"可记），只在真的展开某一页时才记下来，下次重启还停在那一页。
-    LaunchedEffect(expandedTab) { expandedTab?.let(onTabChanged) }
+    // 不再用 rememberSaveable 给每个 Worker 单独存一份"当前展开到哪个标签"——
+    // 直接用外部（HomeScreen）传进来的那一份全局唯一状态，展开哪个 Worker 都读写同一个值，
+    // 比如上次在别的 Worker 里点开了"指标"，换一个 Worker 展开，也是直接停在"指标"。
+    val expandedTab = selectedTab?.coerceIn(0, tabs.size - 1)
 
     val metrics by viewModel.metrics.collectAsState()
     val scriptInfo by viewModel.scriptInfo.collectAsState()
@@ -107,7 +105,7 @@ fun WorkerDetailContent(
                         Row(
                             Modifier
                                 .fillMaxWidth()
-                                .clickable { expandedTab = if (selected) null else index }
+                                .clickable { onTabSelected(if (selected) null else index) }
                                 .padding(horizontal = 14.dp, vertical = 12.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {

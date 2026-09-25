@@ -128,8 +128,11 @@ fun HomeScreen(
     // 重启 App 后保持上次展开的那一个（如果它还在列表里）。
     var expandedAppKey by rememberSaveable { mutableStateOf<String?>(null) }
     var expandedAppKeyLoaded by rememberSaveable { mutableStateOf(false) }
-    // Worker 详情里停留的标签页下标，同样持久化：重启 App 后展开的那个 Worker 会停在上次看的那一页。
-    var detailTabIndex by rememberSaveable { mutableStateOf(0) }
+    // Worker 详情里停留的标签页下标：改成整个 App 唯一一份状态（不再按 Worker 分别记），
+    // 不管展开哪个 Worker，看到的都是同一个"当前展开到哪个标签"的状态——
+    // 比如上次在别的 Worker 里点开了"指标"，换一个 Worker 展开，也是直接停在"指标"。
+    // null 表示"没有任何标签展开"；持久化到 DataStore 时用 -1 表示 null。
+    var detailTabIndex by rememberSaveable { mutableStateOf<Int?>(0) }
     var detailTabIndexLoaded by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         if (!collapsedLoaded) {
@@ -141,7 +144,7 @@ fun HomeScreen(
             expandedAppKeyLoaded = true
         }
         if (!detailTabIndexLoaded) {
-            detailTabIndex = tokenStore.getDetailTabIndex()
+            detailTabIndex = tokenStore.getDetailTabIndex().let { if (it < 0) null else it }
             detailTabIndexLoaded = true
         }
     }
@@ -151,9 +154,9 @@ fun HomeScreen(
         scope.launch { tokenStore.setExpandedAppKey(key) }
     }
 
-    fun setDetailTabIndex(index: Int) {
+    fun setDetailTabIndex(index: Int?) {
         detailTabIndex = index
-        scope.launch { tokenStore.setDetailTabIndex(index) }
+        scope.launch { tokenStore.setDetailTabIndex(index ?: -1) }
     }
 
     val filtered by remember(apps, searchQuery) {
@@ -519,8 +522,8 @@ fun HomeScreen(
                             onToggle = { setExpandedAppKey(if (expandedAppKey == key) null else key) },
                             onCollapse = { setExpandedAppKey(null) },
                             viewModel = viewModel,
-                            initialTabIndex = detailTabIndex,
-                            onTabChanged = ::setDetailTabIndex
+                            selectedTab = detailTabIndex,
+                            onTabSelected = ::setDetailTabIndex
                         )
                     }
                 } else {
@@ -567,8 +570,8 @@ fun HomeScreen(
                                         onToggle = { setExpandedAppKey(if (expandedAppKey == key) null else key) },
                                         onCollapse = { setExpandedAppKey(null) },
                                         viewModel = viewModel,
-                                        initialTabIndex = detailTabIndex,
-                                        onTabChanged = ::setDetailTabIndex
+                                        selectedTab = detailTabIndex,
+                                        onTabSelected = ::setDetailTabIndex
                                     )
                                 }
                             }
@@ -715,8 +718,8 @@ private fun AppRow(
     onToggle: () -> Unit,
     onCollapse: () -> Unit,
     viewModel: MainViewModel,
-    initialTabIndex: Int = 0,
-    onTabChanged: (Int) -> Unit = {}
+    selectedTab: Int? = null,
+    onTabSelected: (Int?) -> Unit = {}
 ) {
     // 上传/下载相关的状态、系统文件选择器、确认/结果弹窗，都只在这一条"展开着"的时候才挂载——
     // 全部 Worker 共用同一份 viewModel 状态，如果每一行都订阅，收起的那些行也会一起弹出对话框。
@@ -862,8 +865,8 @@ private fun AppRow(
                     accountId = app.accountId,
                     viewModel = viewModel,
                     onWorkerDeleted = onCollapse,
-                    initialTabIndex = initialTabIndex,
-                    onTabChanged = onTabChanged
+                    selectedTab = selectedTab,
+                    onTabSelected = onTabSelected
                 )
             }
         }
