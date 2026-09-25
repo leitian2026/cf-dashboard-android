@@ -1,5 +1,6 @@
 package com.leitian.cfdashboard.ui.screens
 
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -71,8 +72,10 @@ fun WorkerDetailContent(
     LaunchedEffect(pagerState) {
         snapshotFlow { pagerState.currentPage }.collect { onTabChanged(it) }
     }
-    // 所有标签页共用的统一高度（取目前见过的最高值），配合下面 Pager 内容里的 heightIn(min=...) 使用。
-    var maxPageHeightPx by remember { mutableStateOf(0) }
+    // 每个标签页各自记住自己内容的高度（取该标签页见过的最高值），而不是所有标签页共用同一个最大值——
+    // 这样短的标签页（比如"域"）不会被高的标签页（比如"设置"）撑出一截空白，同时同一个标签页内部
+    // 划动时高度也还是稳定的，不会来回跳。
+    val pageHeightsPx = remember { mutableStateMapOf<Int, Int>() }
     val pagerHeightDensity = LocalDensity.current
 
     val metrics by viewModel.metrics.collectAsState()
@@ -241,23 +244,39 @@ fun WorkerDetailContent(
         }
         HorizontalDivider(color = CfColors.Border)
 
-        HorizontalPager(
-            state = pagerState,
-            modifier = Modifier.fillMaxWidth(),
-            beyondViewportPageCount = 1 // 预先合成相邻标签页，划动更顺，不会等到划一半才现算
-        ) { page ->
-            // 8 个标签内容高度差异很大（比如"指标"矮、"设置"很高），
-            // Pager 默认按当前页高度自适应，划动时两页高度不一致会出现一边高一边低、错位的问题。
-            // 这里记录目前见过的最高高度，统一当作所有标签的高度（只会变高不会变矮，也不会裁切内容），
-            // 划动过程中容器高度稳定，就不会再错位、也更流畅。
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = with(pagerHeightDensity) { maxPageHeightPx.toDp() })
-                    .onSizeChanged { size -> if (size.height > maxPageHeightPx) maxPageHeightPx = size.height }
-            ) {
-                Column(Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
-                    when (page) {
+        // 每个标签页只记自己内容的高度（不同标签页可以不一样），外层容器的高度跟着"当前所在的标签页"走，
+        // 并且用 animateContentSize() 让高度变化的时候是平滑过渡，而不是一下子跳过去或者跳回来。
+        val currentPageHeightPx = pageHeightsPx[pagerState.currentPage]
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .animateContentSize()
+                .then(
+                    if (currentPageHeightPx != null && currentPageHeightPx > 0) {
+                        Modifier.height(with(pagerHeightDensity) { currentPageHeightPx.toDp() })
+                    } else {
+                        Modifier
+                    }
+                )
+        ) {
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier.fillMaxWidth().fillMaxHeight(),
+                beyondViewportPageCount = 1 // 预先合成相邻标签页，划动更顺，也能提前量出它的高度
+            ) { page ->
+                // wrapContentHeight(unbounded = true) 让这一页按自己内容的真实高度去测量，
+                // 不受外层容器当前高度（可能是上一个标签页留下的）限制，量出来的高度存进 pageHeightsPx，
+                // 外层容器再用这个高度做动画过渡——短的标签页不会被撑高，也不会忽高忽低。
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .wrapContentHeight(unbounded = true, align = Alignment.Top)
+                        .onSizeChanged { size ->
+                            if (size.height != (pageHeightsPx[page] ?: -1)) pageHeightsPx[page] = size.height
+                        }
+                ) {
+                    Column(Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
+                        when (page) {
                         0 -> OverviewTab(appName, scriptInfo, metrics, metricsLoading, metricsError, domains)
                         1 -> MetricsTab(metrics, metricsLoading, metricsError, deployments)
                         2 -> DeploymentsTab(deployments, deploymentsError, tabLoading, appName, viewModel)
@@ -278,6 +297,7 @@ fun WorkerDetailContent(
             }
         }
     }
+}
 }
 
 @Composable
