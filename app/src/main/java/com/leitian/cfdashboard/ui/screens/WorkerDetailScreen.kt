@@ -42,6 +42,9 @@ import com.leitian.cfdashboard.ui.components.*
 import com.leitian.cfdashboard.ui.viewmodel.MainViewModel
 import com.leitian.cfdashboard.ui.viewmodel.WriteState
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Locale
+import java.util.TimeZone
 
 /**
  * Worker 详情内容：内嵌展示在首页列表条目下方（点条目原地展开，不再跳转页面）。
@@ -329,12 +332,21 @@ private fun OverviewTab(
 private fun MetricSummaryRow(metrics: CloudflareApi.WorkerMetrics?, loading: Boolean) {
     val m = metrics
     val req = when { loading && m == null -> "…"; m != null -> CloudflareApi.formatCount(m.totalRequests); else -> "0" }
-    val cpu = when { loading && m == null -> "…"; m != null -> CloudflareApi.formatCpu(m.cpuTimeMs); else -> "0 ms" }
+    val sub = when { loading && m == null -> "…"; m != null -> CloudflareApi.formatCount(m.totalSubrequests); else -> "0" }
     val err = when { loading && m == null -> "…"; m != null -> m.totalErrors.toString(); else -> "0" }
     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        TrendMetricCard("调用次数", req, m?.requestPoints ?: emptyList(), Modifier.width(160.dp))
-        TrendMetricCard("CPU 时间", cpu, m?.cpuPoints ?: emptyList(), Modifier.width(160.dp))
-        TrendMetricCard("错误", err, m?.errorPoints ?: emptyList(), Modifier.width(160.dp), lineColor = Color(0xFFEF4444))
+        TrendMetricCard(
+            "调用次数", req, m?.requestPoints ?: emptyList(), Modifier.width(160.dp),
+            changePct = m?.requestsChangePct, positiveIsGood = true
+        )
+        TrendMetricCard(
+            "子请求", sub, m?.subrequestPoints ?: emptyList(), Modifier.width(160.dp),
+            changePct = m?.subrequestsChangePct, positiveIsGood = true
+        )
+        TrendMetricCard(
+            "错误", err, m?.errorPoints ?: emptyList(), Modifier.width(160.dp), lineColor = Color(0xFFEF4444),
+            changePct = m?.errorsChangePct, positiveIsGood = false
+        )
     }
 }
 
@@ -362,19 +374,31 @@ private fun MetricsTab(
         if (metricsError != null) Text(metricsError, color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
         MetricSummaryRow(metrics, metricsLoading)
         CfSectionTitle("可用部署")
-        AvailableDeploymentsTable(deployments, onlyCurrent = true)
+        AvailableDeploymentsTable(deployments, metrics, onlyCurrent = true)
         CfSectionTitle("调用次数")
         Column(Modifier.fillMaxWidth().border(1.dp, CfColors.Border, RoundedCornerShape(8.dp)).padding(12.dp)) {
             var showBar by remember { mutableStateOf(true) }
+            val segments = remember(metrics?.bucketKeys, deployments) {
+                buildDeploymentSegments(deployments, metrics?.bucketKeys ?: emptyList(), metrics?.requestPoints ?: emptyList())
+            }
+            if (segments.legend.size > 1) {
+                ChartLegendRow(segments.legend, CloudflareApi::formatCount, Modifier.fillMaxWidth())
+                Spacer(Modifier.height(8.dp))
+            } else {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(8.dp).background(CfColors.BarPurple, CircleShape))
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        "过去24小时 · ${metrics?.let { CloudflareApi.formatCount(it.totalRequests) } ?: "0"}",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+            }
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(8.dp).background(CfColors.BarPurple, CircleShape))
-                Spacer(Modifier.width(6.dp))
-                Text(
-                    "过去24小时 · ${metrics?.let { CloudflareApi.formatCount(it.totalRequests) } ?: "0"}",
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.weight(1f)
-                )
+                Spacer(Modifier.weight(1f))
                 Text(
                     "柱状",
                     fontSize = 11.sp,
@@ -401,7 +425,14 @@ private fun MetricsTab(
             }
             Spacer(Modifier.height(8.dp))
             if (showBar) {
-                BarChart(values = metrics?.requestPoints ?: emptyList(), modifier = Modifier.fillMaxWidth().height(240.dp))
+                SegmentedInvocationChart(
+                    values = metrics?.requestPoints ?: emptyList(),
+                    bucketKeys = metrics?.bucketKeys ?: emptyList(),
+                    barColors = segments.barColors,
+                    deploymentMarkers = segments.markers,
+                    valueFormatter = { CloudflareApi.formatCount(it.toLong()) },
+                    modifier = Modifier.fillMaxWidth().height(240.dp)
+                )
             } else {
                 AreaSparkline(
                     points = metrics?.requestRatePoints ?: emptyList(),
@@ -414,8 +445,81 @@ private fun MetricsTab(
     }
 }
 
+private val DeploymentChartPalette = listOf(
+    CfColors.BarPurple,
+    Color(0xFFEA580C),
+    Color(0xFF0EA5E9),
+    Color(0xFF16A34A),
+    Color(0xFFCA8A04)
+)
+
+private data class DeploymentSegments(
+    val barColors: List<Color>,
+    val legend: List<ChartLegendItem>,
+    val markers: List<Pair<Int, String>>
+)
+
+private fun parseUtc(pattern: String, value: String): Long? = try {
+    SimpleDateFormat(pattern, Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }.parse(value)?.time
+} catch (e: Exception) {
+    null
+}
+
+/**
+ * 把"调用次数"图表的每根柱子按当时生效的部署版本上色，同时算出图例（每个版本的颜色+总量）
+ * 和需要画竖线标记的部署时间点——数据来源就是已经在拉的部署列表 + 指标的时间桶，不需要额外接口
+ * （Cloudflare 公开的 GraphQL 分析接口本身不提供"这次调用是哪个版本处理的"这种按版本拆分的数据，
+ * 这里是用"这个时间点当时哪个版本在线"来近似还原网页版图表的分段效果）。
+ */
+private fun buildDeploymentSegments(
+    deployments: List<DeploymentItem>,
+    bucketKeys: List<String>,
+    values: List<Float>
+): DeploymentSegments {
+    if (bucketKeys.isEmpty()) return DeploymentSegments(emptyList(), emptyList(), emptyList())
+
+    val sortedDeploys = deployments
+        .mapNotNull { d -> parseUtc("yyyy-MM-dd HH:mm:ss", d.createdOn)?.let { d to it } }
+        .sortedBy { it.second }
+
+    if (sortedDeploys.isEmpty()) {
+        return DeploymentSegments(List(bucketKeys.size) { CfColors.BarPurple }, emptyList(), emptyList())
+    }
+
+    val bucketTimes = bucketKeys.map { parseUtc("yyyy-MM-dd'T'HH:mm", it) }
+    val colorFor = linkedMapOf<String, Color>()
+    var nextColor = 0
+    fun colorForVersion(versionId: String): Color =
+        colorFor.getOrPut(versionId) { DeploymentChartPalette[nextColor++ % DeploymentChartPalette.size] }
+
+    val barColors = ArrayList<Color>(bucketKeys.size)
+    val totals = linkedMapOf<String, Long>()
+    bucketTimes.forEachIndexed { i, t ->
+        val active = if (t == null) sortedDeploys.last().first
+            else sortedDeploys.lastOrNull { it.second <= t }?.first ?: sortedDeploys.first().first
+        barColors.add(colorForVersion(active.versionId))
+        totals[active.versionId] = (totals[active.versionId] ?: 0L) + (values.getOrNull(i)?.toLong() ?: 0L)
+    }
+
+    // 只标出真正落在这段时间范围内的部署时间点，比所有采样点都早的部署（一直在线，没有切换）不用画。
+    val markers = sortedDeploys.mapNotNull { (d, t) ->
+        val idx = bucketTimes.indexOfFirst { it != null && it >= t }
+        if (idx <= 0) null else idx to "Deployed ${d.versionId}"
+    }
+
+    val legend = totals.entries.sortedByDescending { it.value }.map { (versionId, total) ->
+        ChartLegendItem(versionId, colorFor[versionId] ?: CfColors.BarPurple, total)
+    }
+
+    return DeploymentSegments(barColors, legend, markers)
+}
+
 @Composable
-private fun AvailableDeploymentsTable(items: List<DeploymentItem>, onlyCurrent: Boolean = false) {
+private fun AvailableDeploymentsTable(
+    items: List<DeploymentItem>,
+    metrics: CloudflareApi.WorkerMetrics? = null,
+    onlyCurrent: Boolean = false
+) {
     val shown = if (onlyCurrent) items.filter { it.isLatest }.ifEmpty { items.take(1) } else items.take(5)
     CfTable(header = {
         Text("版本 ID", Modifier.weight(1.2f), fontSize = 11.sp, color = CfColors.GrayText)
@@ -437,6 +541,18 @@ private fun AvailableDeploymentsTable(items: List<DeploymentItem>, onlyCurrent: 
                     }
                 }
             }
+        }
+    }
+    // 手机屏幕横向放不下网页版那么多列，把"请求/秒、错误率、中值 CPU"折到表格下面单独一行，
+    // 信息跟网页版一致，只是排版换成上下堆叠。只有一个版本（onlyCurrent）时这几个数字才等于整体指标。
+    if (onlyCurrent && metrics != null && shown.isNotEmpty()) {
+        val reqPerSec = metrics.totalRequests / 86400.0
+        val errRate = if (metrics.totalRequests > 0) metrics.totalErrors.toDouble() / metrics.totalRequests * 100.0 else 0.0
+        Spacer(Modifier.height(8.dp))
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            Text("请求/秒 ${String.format(Locale.US, "%.1f", reqPerSec)}", fontSize = 11.sp, color = CfColors.GrayText)
+            Text("错误率 ${String.format(Locale.US, "%.1f", errRate)}%", fontSize = 11.sp, color = CfColors.GrayText)
+            Text("中值 CPU ${String.format(Locale.US, "%.2f", metrics.cpuTimeMs)} ms", fontSize = 11.sp, color = CfColors.GrayText)
         }
     }
 }
