@@ -261,11 +261,14 @@ fun BarChart(
         }
         values.forEachIndexed { i, v ->
             val h = (v / maxV) * size.height * 0.9f
-            val x = gap + i * (barW + gap)
+            val slotX = gap + i * (barW + gap)
+            // 柱子比格子窄一点，视觉上更细，同时保持左右居中。
+            val drawW = barW * 0.65f
+            val x = slotX + (barW - drawW) / 2f
             drawRect(
                 color = barColor,
                 topLeft = Offset(x, size.height - h),
-                size = androidx.compose.ui.geometry.Size(barW, h)
+                size = androidx.compose.ui.geometry.Size(drawW, h)
             )
         }
     }
