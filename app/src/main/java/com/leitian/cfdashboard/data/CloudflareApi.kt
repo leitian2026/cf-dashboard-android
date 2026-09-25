@@ -145,6 +145,27 @@ object CloudflareApi {
         return "$hourPart:${m.toString().padStart(2, '0')}"
     }
 
+    /**
+     * 把查询区间按 15 分钟切成完整的一串桶 key（含没有任何请求的桶），保证图表横轴是等距的真实时间刻度。
+     * 之前只用"实际返回过数据的桶"来排序，夜里没有请求的那一段会被跳过、导致柱子被"挤"在一起看不出空档，
+     * 跟网页版"这一段时间是空的"的效果不一样——所以这里不管有没有数据，24 小时的桶都补全。
+     */
+    private fun generate15mBucketKeys(startIso: String, endIso: String): List<String> {
+        val utc = TimeZone.getTimeZone("UTC")
+        val parser = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply { timeZone = utc }
+        val startMs = parser.parse(startIso)?.time ?: return emptyList()
+        val endMs = parser.parse(endIso)?.time ?: return emptyList()
+        val bucketMs = 15L * 60 * 1000
+        val keyFmt = SimpleDateFormat("yyyy-MM-dd'T'HH:mm", Locale.US).apply { timeZone = utc }
+        val keys = mutableListOf<String>()
+        var t = (startMs / bucketMs) * bucketMs
+        while (t <= endMs) {
+            keys.add(keyFmt.format(Date(t)))
+            t += bucketMs
+        }
+        return keys
+    }
+
     private fun truncate(s: String, max: Int = 300): String =
         if (s.length <= max) s else s.take(max) + "..."
 
@@ -623,7 +644,7 @@ object CloudflareApi {
                 if (all.isNotEmpty()) cpuMs = all.average()
             }
 
-            val sortedKeys = hourReq.keys.sorted()
+            val sortedKeys = generate15mBucketKeys(start, end).ifEmpty { hourReq.keys.sorted() }
             val bucketSeconds = 15f * 60f
             val requestPoints = sortedKeys.map { (hourReq[it] ?: 0L).toFloat() }
             val requestRatePoints = sortedKeys.map { (hourReq[it] ?: 0L).toFloat() / bucketSeconds }
