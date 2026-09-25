@@ -331,10 +331,12 @@ private fun OverviewTab(
 @Composable
 private fun MetricSummaryRow(metrics: CloudflareApi.WorkerMetrics?, loading: Boolean) {
     val m = metrics
+    val cpu = when { loading && m == null -> "…"; m != null -> CloudflareApi.formatCpu(m.cpuTimeMs); else -> "0 ms" }
     val req = when { loading && m == null -> "…"; m != null -> CloudflareApi.formatCount(m.totalRequests); else -> "0" }
     val sub = when { loading && m == null -> "…"; m != null -> CloudflareApi.formatCount(m.totalSubrequests); else -> "0" }
     val err = when { loading && m == null -> "…"; m != null -> m.totalErrors.toString(); else -> "0" }
     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        TrendMetricCard("CPU 时间", cpu, m?.cpuPoints ?: emptyList(), Modifier.width(160.dp))
         TrendMetricCard(
             "调用次数", req, m?.requestPoints ?: emptyList(), Modifier.width(160.dp),
             changePct = m?.requestsChangePct, positiveIsGood = true
@@ -521,16 +523,19 @@ private fun AvailableDeploymentsTable(
     onlyCurrent: Boolean = false
 ) {
     val shown = if (onlyCurrent) items.filter { it.isLatest }.ifEmpty { items.take(1) } else items.take(5)
-    CfTable(header = {
-        Text("版本 ID", Modifier.weight(1.2f), fontSize = 11.sp, color = CfColors.GrayText)
-        Text("已部署", Modifier.weight(1.4f), fontSize = 11.sp, color = CfColors.GrayText)
-        Text("流量", Modifier.weight(0.8f), fontSize = 11.sp, color = CfColors.GrayText)
-    }) {
+    CfTable(
+        dense = onlyCurrent,
+        header = {
+            Text("版本 ID", Modifier.weight(1.2f), fontSize = 11.sp, color = CfColors.GrayText)
+            Text("已部署", Modifier.weight(1.4f), fontSize = 11.sp, color = CfColors.GrayText)
+            Text("流量", Modifier.weight(0.8f), fontSize = 11.sp, color = CfColors.GrayText)
+        }
+    ) {
         if (shown.isEmpty()) {
             Text("暂无部署", Modifier.padding(16.dp), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         } else {
             shown.forEachIndexed { index, d ->
-                CfTableRow(showDivider = index != shown.lastIndex) {
+                CfTableRow(showDivider = index != shown.lastIndex, dense = onlyCurrent) {
                     MonoLinkText(d.versionId, Modifier.weight(1.2f))
                     Column(Modifier.weight(1.4f)) {
                         Text(d.createdOn, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -548,7 +553,7 @@ private fun AvailableDeploymentsTable(
     if (onlyCurrent && metrics != null && shown.isNotEmpty()) {
         val reqPerSec = metrics.totalRequests / 86400.0
         val errRate = if (metrics.totalRequests > 0) metrics.totalErrors.toDouble() / metrics.totalRequests * 100.0 else 0.0
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(6.dp))
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             Text("请求/秒 ${String.format(Locale.US, "%.1f", reqPerSec)}", fontSize = 11.sp, color = CfColors.GrayText)
             Text("错误率 ${String.format(Locale.US, "%.1f", errRate)}%", fontSize = 11.sp, color = CfColors.GrayText)
