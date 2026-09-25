@@ -347,31 +347,63 @@ fun HomeScreen(
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                items(accounts, key = { "stats:${it.accountId}" }) { acc ->
-                    val accStats = statsByAccount[acc.accountId]
-                    val accError = statsErrorByAccount[acc.accountId]
-                    Column {
-                        if (multiAccount) {
-                            Text(
-                                acc.accountName.ifBlank { acc.email },
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                modifier = Modifier.padding(bottom = 8.dp)
-                            )
+                if (multiAccount) {
+                    // 多账号：所有账号的"今日"统计并排放在同一行里，各占一列，
+                    // 而不是像之前那样一个账号一整块、上下堆叠。
+                    item(key = "stats-row") {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            accounts.forEach { acc ->
+                                val accStats = statsByAccount[acc.accountId]
+                                val accError = statsErrorByAccount[acc.accountId]
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        acc.accountName.ifBlank { acc.email },
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.padding(bottom = 8.dp)
+                                    )
+                                    PeriodStats(
+                                        requests = accStats?.let { CloudflareApi.formatCount(it.requests) } ?: "—",
+                                        cpu = accStats?.let { CloudflareApi.formatCpu(it.cpuTimeMs) } ?: "—",
+                                        errors = accStats?.errors?.toString() ?: "—",
+                                        workersCount = apps.count { !it.isPages && it.accountId == acc.accountId }.toString()
+                                    )
+                                    if (accError != null) {
+                                        Spacer(Modifier.height(4.dp))
+                                        Text(
+                                            "统计提示: $accError",
+                                            fontSize = 12.sp,
+                                            color = MaterialTheme.colorScheme.error
+                                        )
+                                    }
+                                }
+                            }
                         }
-                        PeriodStats(
-                            requests = accStats?.let { CloudflareApi.formatCount(it.requests) } ?: "—",
-                            cpu = accStats?.let { CloudflareApi.formatCpu(it.cpuTimeMs) } ?: "—",
-                            errors = accStats?.errors?.toString() ?: "—",
-                            workersCount = apps.count { !it.isPages && it.accountId == acc.accountId }.toString()
-                        )
-                        if (accError != null) {
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                "统计提示: $accError",
-                                fontSize = 12.sp,
-                                color = MaterialTheme.colorScheme.error
+                    }
+                } else {
+                    items(accounts, key = { "stats:${it.accountId}" }) { acc ->
+                        val accStats = statsByAccount[acc.accountId]
+                        val accError = statsErrorByAccount[acc.accountId]
+                        Column {
+                            PeriodStats(
+                                requests = accStats?.let { CloudflareApi.formatCount(it.requests) } ?: "—",
+                                cpu = accStats?.let { CloudflareApi.formatCpu(it.cpuTimeMs) } ?: "—",
+                                errors = accStats?.errors?.toString() ?: "—",
+                                workersCount = apps.count { !it.isPages && it.accountId == acc.accountId }.toString()
                             )
+                            if (accError != null) {
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    "统计提示: $accError",
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                            }
                         }
                     }
                 }
@@ -641,13 +673,13 @@ private fun AppRow(
 @Composable
 private fun AppListItem(app: CloudflareApi.AppItem, expanded: Boolean, onClick: () -> Unit) {
     Card(
-        Modifier.fillMaxWidth().clickable(onClick = onClick),
+        Modifier.fillMaxWidth().height(CompactRowHeight).clickable(onClick = onClick),
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+            Modifier.fillMaxSize().padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box(
@@ -657,26 +689,15 @@ private fun AppListItem(app: CloudflareApi.AppItem, expanded: Boolean, onClick: 
                 Icon(Icons.Outlined.Description, null, tint = MaterialTheme.colorScheme.secondary, modifier = Modifier.size(13.dp))
             }
             Spacer(Modifier.width(10.dp))
-            // 域名和类型合并成一行小字，去掉更新时间列，整体压成两行，跟改动前比矮了不少。
-            Column(Modifier.weight(1f)) {
-                Text(
-                    app.name,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 14.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                val secondLine = if (app.domain.isNotBlank()) "${app.domain} · ${app.subtitle}" else app.subtitle
-                if (secondLine.isNotBlank()) {
-                    Text(
-                        secondLine,
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-            }
+            // 只显示 Worker/Pages 名称，跟账号折叠头一样只占一行，高度也对齐到 CompactRowHeight。
+            Text(
+                app.name,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 14.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
             Spacer(Modifier.width(4.dp))
             Icon(
                 if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
