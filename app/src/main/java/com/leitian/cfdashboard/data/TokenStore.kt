@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -35,6 +36,8 @@ class TokenStore(private val context: Context) {
     private val COLLAPSED_ACCOUNT_IDS = stringSetPreferencesKey("collapsed_account_ids")
     // 当前展开的 Worker/Pages 条目 key（同一时间只展开一个），重启 App 后保持上次的展开状态。
     private val EXPANDED_APP_KEY = stringPreferencesKey("expanded_app_key")
+    // Worker 详情里当前选中的标签页下标（概述/指标/部署/...），重启 App 后保持上次停留的标签页。
+    private val DETAIL_TAB_INDEX = intPreferencesKey("detail_tab_index")
 
     /** 保留字段：第一个已登录账号的邮箱，仅用于兼容旧代码里对单一邮箱的展示需求。 */
     val emailFlow: Flow<String?> = context.dataStore.data.map { prefs ->
@@ -124,6 +127,13 @@ class TokenStore(private val context: Context) {
         context.dataStore.edit { prefs ->
             if (key.isNullOrBlank()) prefs.remove(EXPANDED_APP_KEY) else prefs[EXPANDED_APP_KEY] = key
         }
+    }
+
+    suspend fun getDetailTabIndex(): Int =
+        context.dataStore.data.first()[DETAIL_TAB_INDEX] ?: 0
+
+    suspend fun setDetailTabIndex(index: Int) {
+        context.dataStore.edit { prefs -> prefs[DETAIL_TAB_INDEX] = index }
     }
 
     suspend fun clear() {
