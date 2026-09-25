@@ -76,7 +76,14 @@ fun WorkerDetailContent(
     val settingsDetail by viewModel.settingsDetail.collectAsState()
     val settingsError by viewModel.settingsError.collectAsState()
 
+    // 只重置状态、记录当前是哪个 Worker，不在这里发任何请求——具体拉哪些数据
+    // 由下面这个 LaunchedEffect(expandedTab) 根据用户实际点开的标签决定。
     LaunchedEffect(appName, accountId) { viewModel.loadDetail(appName, isPages, accountId) }
+    // 展开到某个标签（含一开始就恢复到上次停留的那个标签）时，只请求这个标签需要的数据；
+    // 没点开的标签不会联网。同一个标签数据加载过一次后，再次展开不会重复请求。
+    LaunchedEffect(appName, accountId, expandedTab) {
+        if (expandedTab != null) viewModel.loadTab(expandedTab)
+    }
     DisposableEffect(Unit) { onDispose { viewModel.clearDetail() } }
 
     Column(Modifier.fillMaxWidth()) {
