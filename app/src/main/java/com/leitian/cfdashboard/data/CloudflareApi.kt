@@ -58,11 +58,20 @@ object CloudflareApi {
     data class WorkerMetrics(
         val totalRequests: Long,
         val totalErrors: Long,
+        val totalSubrequests: Long,
         val cpuTimeMs: Double,
         val requestPoints: List<Float>,
         val requestRatePoints: List<Float>,
         val cpuPoints: List<Float>,
-        val errorPoints: List<Float>
+        val errorPoints: List<Float>,
+        val subrequestPoints: List<Float>,
+        // 每个采样点对应的 UTC 15 分钟桶 key（"yyyy-MM-ddTHH:mm"），和上面几个 points 一一对应，
+        // 用来在图表上画时间刻度、以及比对部署时间落在哪个柱子上。
+        val bucketKeys: List<String>,
+        // 相比前一个 24 小时周期的变化百分比；前一周期基数为 0 时给 null（避免除零/无意义的巨大百分比）。
+        val requestsChangePct: Double?,
+        val subrequestsChangePct: Double?,
+        val errorsChangePct: Double?
     )
 
     data class ScriptInfo(
@@ -113,6 +122,20 @@ object CloudflareApi {
         val start = Date(end.time - 24L * 60 * 60 * 1000)
         return sdf.format(start) to sdf.format(end)
     }
+
+    /** 再往前推 24 小时的同长度区间，用来算"相比前一周期"的百分比变化。 */
+    private fun previous24HoursRange(): Pair<String, String> {
+        val utc = TimeZone.getTimeZone("UTC")
+        val sdf = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply { timeZone = utc }
+        val end = Date()
+        val periodEnd = Date(end.time - 24L * 60 * 60 * 1000)
+        val periodStart = Date(end.time - 48L * 60 * 60 * 1000)
+        return sdf.format(periodStart) to sdf.format(periodEnd)
+    }
+
+    /** (当前值 - 上一周期值) / 上一周期值 * 100；上一周期为 0 时返回 null，不算无意义的百分比。 */
+    private fun changePct(current: Long, previous: Long): Double? =
+        if (previous <= 0L) null else (current - previous).toDouble() / previous.toDouble() * 100.0
 
     private fun bucketKey15m(dt: String): String {
         if (dt.length < 16) return if (dt.length >= 13) dt.substring(0, 13) else dt
@@ -447,7 +470,9 @@ object CloudflareApi {
     ): ApiResult<WorkerMetrics> = withContext(Dispatchers.IO) {
         try {
             val (start, end) = last24HoursRange()
+            val (prevStart, prevEnd) = previous24HoursRange()
             val filter = """scriptName: "$scriptName", datetime_geq: "$start", datetime_leq: "$end""""
+            val prevFilter = """scriptName: "$scriptName", datetime_geq: "$prevStart", datetime_leq: "$prevEnd""""
 
             val summaryQuery = """
                 query {
@@ -457,8 +482,24 @@ object CloudflareApi {
                         limit: 1,
                         filter: { $filter }
                       ) {
-                        sum { requests errors }
+                        sum { requests errors subrequests }
                         quantiles { cpuTimeP50 }
+                      }
+                    }
+                  }
+                }
+            """.trimIndent()
+
+            // 上一个 24 小时周期，只要总量，用来算涨跌百分比（跟真正的 Cloudflare 面板一样）。
+            val prevSummaryQuery = """
+                query {
+                  viewer {
+                    accounts(filter: {accountTag: "$accountId"}) {
+                      workersInvocationsAdaptive(
+                        limit: 1,
+                        filter: { $prevFilter }
+                      ) {
+                        sum { requests errors subrequests }
                       }
                     }
                   }
@@ -473,7 +514,7 @@ object CloudflareApi {
                         limit: 10000,
                         filter: { $filter }
                       ) {
-                        sum { requests errors }
+                        sum { requests errors subrequests }
                         quantiles { cpuTimeP50 }
                         dimensions { datetime }
                       }
@@ -505,10 +546,11 @@ object CloudflareApi {
                 return GqlOutcome(true, rows)
             }
 
-            val (summary, series) = coroutineScope {
+            val (summary, series, prevSummary) = coroutineScope {
                 val s = async { runQuery(summaryQuery) }
                 val t = async { runQuery(seriesQuery) }
-                s.await() to t.await()
+                val p = async { runQuery(prevSummaryQuery) }
+                Triple(s.await(), t.await(), p.await())
             }
 
             if (!summary.ok && !series.ok) {
@@ -517,6 +559,7 @@ object CloudflareApi {
 
             var totalReq = 0L
             var totalErr = 0L
+            var totalSub = 0L
             var cpuMs = 0.0
             if (summary.ok && summary.rows.length() > 0) {
                 for (i in 0 until summary.rows.length()) {
@@ -525,6 +568,7 @@ object CloudflareApi {
                     val q = row.optJSONObject("quantiles")
                     totalReq += sum?.optLong("requests") ?: 0L
                     totalErr += sum?.optLong("errors") ?: 0L
+                    totalSub += sum?.optLong("subrequests") ?: 0L
                     val cpuUs = q?.optDouble("cpuTimeP50") ?: 0.0
                     if (cpuUs > 0) {
                         cpuMs = cpuUs / 1000.0
@@ -532,8 +576,22 @@ object CloudflareApi {
                 }
             }
 
+            // 上一周期总量，只用来算百分比，查询失败就当没有基数，不显示涨跌箭头（而不是报错整个请求）。
+            var prevReq = 0L
+            var prevErr = 0L
+            var prevSub = 0L
+            if (prevSummary.ok) {
+                for (i in 0 until prevSummary.rows.length()) {
+                    val sum = prevSummary.rows.getJSONObject(i).optJSONObject("sum")
+                    prevReq += sum?.optLong("requests") ?: 0L
+                    prevErr += sum?.optLong("errors") ?: 0L
+                    prevSub += sum?.optLong("subrequests") ?: 0L
+                }
+            }
+
             val hourReq = linkedMapOf<String, Long>()
             val hourErr = linkedMapOf<String, Long>()
+            val hourSub = linkedMapOf<String, Long>()
             val hourCpu = linkedMapOf<String, MutableList<Double>>()
             if (series.ok) {
                 for (i in 0 until series.rows.length()) {
@@ -543,15 +601,18 @@ object CloudflareApi {
                     val dim = row.optJSONObject("dimensions")
                     val reqs = sum?.optLong("requests") ?: 0L
                     val errs = sum?.optLong("errors") ?: 0L
+                    val subs = sum?.optLong("subrequests") ?: 0L
                     val cpuUs = q?.optDouble("cpuTimeP50") ?: 0.0
                     if (!summary.ok) {
                         totalReq += reqs
                         totalErr += errs
+                        totalSub += subs
                     }
                     val dt = dim?.optString("datetime") ?: continue
                     val hourKey = bucketKey15m(dt)
                     hourReq[hourKey] = (hourReq[hourKey] ?: 0L) + reqs
                     hourErr[hourKey] = (hourErr[hourKey] ?: 0L) + errs
+                    hourSub[hourKey] = (hourSub[hourKey] ?: 0L) + subs
                     if (cpuUs > 0) {
                         hourCpu.getOrPut(hourKey) { mutableListOf() }.add(cpuUs / 1000.0)
                     }
@@ -567,6 +628,7 @@ object CloudflareApi {
             val requestPoints = sortedKeys.map { (hourReq[it] ?: 0L).toFloat() }
             val requestRatePoints = sortedKeys.map { (hourReq[it] ?: 0L).toFloat() / bucketSeconds }
             val errorPoints = sortedKeys.map { (hourErr[it] ?: 0L).toFloat() }
+            val subrequestPoints = sortedKeys.map { (hourSub[it] ?: 0L).toFloat() }
             val cpuPoints = sortedKeys.map { k ->
                 val list = hourCpu[k]
                 if (list.isNullOrEmpty()) 0f else list.average().toFloat()
@@ -577,11 +639,17 @@ object CloudflareApi {
                 WorkerMetrics(
                     totalRequests = totalReq,
                     totalErrors = totalErr,
+                    totalSubrequests = totalSub,
                     cpuTimeMs = cpuMs,
                     requestPoints = requestPoints,
                     requestRatePoints = requestRatePoints,
                     cpuPoints = cpuPoints,
-                    errorPoints = errorPoints
+                    errorPoints = errorPoints,
+                    subrequestPoints = subrequestPoints,
+                    bucketKeys = sortedKeys,
+                    requestsChangePct = changePct(totalReq, prevReq),
+                    subrequestsChangePct = changePct(totalSub, prevSub),
+                    errorsChangePct = changePct(totalErr, prevErr)
                 )
             )
         } catch (e: Exception) {
