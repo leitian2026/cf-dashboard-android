@@ -39,9 +39,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -51,6 +54,7 @@ import com.leitian.cfdashboard.data.NetworkLogging
 import com.leitian.cfdashboard.data.SavedAccount
 import com.leitian.cfdashboard.data.TokenStore
 import com.leitian.cfdashboard.ui.viewmodel.MainViewModel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 // 统一的"紧凑行"高度：账号折叠头、搜索框都对齐到这个高度。
@@ -87,6 +91,16 @@ fun HomeScreen(
     var searchQuery by remember { mutableStateOf("") }
     // 搜索框放到顶栏里，跟账号登录图标同一排；点搜索图标后顶栏标题切换成输入框。
     var searchActive by remember { mutableStateOf(false) }
+    val searchFocusRequester = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
+    // 点击搜索图标展开输入框后，自动把光标定位进去并弹出键盘，不用用户再点一下。
+    LaunchedEffect(searchActive) {
+        if (searchActive) {
+            delay(80)
+            searchFocusRequester.requestFocus()
+            keyboardController?.show()
+        }
+    }
     var showCreateDialog by remember { mutableStateOf(false) }
     var newWorkerName by remember { mutableStateOf("") }
     var showAccountsMenu by remember { mutableStateOf(false) }
@@ -282,7 +296,7 @@ fun HomeScreen(
                                     color = MaterialTheme.colorScheme.onSurface
                                 ),
                                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                                modifier = Modifier.fillMaxWidth()
+                                modifier = Modifier.fillMaxWidth().focusRequester(searchFocusRequester)
                             )
                         }
                     } else {
@@ -634,7 +648,7 @@ private fun AccountGroupHeader(
 private fun PeriodStats(header: String?, requests: String, cpu: String, errors: String, workersCount: String) {
     Column {
         if (header != null) {
-            Text(header, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(bottom = 6.dp))
+            Text(header, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(bottom = 6.dp))
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             StatCard(Icons.Outlined.SwapVert, StatRequestsColor, "请求", requests, Modifier.weight(1f))
@@ -674,7 +688,7 @@ private fun StatCard(
             }
             Spacer(Modifier.width(8.dp))
             Column(Modifier.weight(1f)) {
-                Text(title, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(title, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(
                     value,
                     fontWeight = FontWeight.Bold,
