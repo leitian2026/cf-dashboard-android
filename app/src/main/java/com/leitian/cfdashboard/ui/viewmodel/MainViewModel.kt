@@ -158,10 +158,20 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
     private var accountId: String? = null
     private var accountName: String? = null
 
-    // 正在进行的"加载 Worker 详情"任务。连续快速展开好几个 Worker 时，
-    // 上一个还没跑完的那一整批详情请求（脚本信息+指标+部署+域名+……）会被直接取消，
-    // 不会跟新展开的 Worker 的请求一起挤在网络上，避免越点越卡。
-    private var loadDetailJob: Job? = null
+    // 当前详情页对应的 Worker/Pages 项目。loadDetail() 只记录这两个值、重置状态，
+    // 不再一次性把 8 个标签的数据全部请求下来——具体某个标签的数据只在那个标签真正被
+    // 点开时才去请求（见 loadTab / ensure* 系列函数），没点开的标签不联网。
+    private var currentScriptName: String? = null
+    private var currentIsPages: Boolean = false
+
+    // 每种数据只在同一次详情页会话里成功加载一次；重复切换/重新展开同一个标签不会重复请求，
+    // 只有 loadDetail()（换了个 Worker）或 forceReload()（写操作后主动刷新）会清掉重新拉。
+    private val loadedDataTypes = mutableSetOf<String>()
+    private val dataTypeJobs = mutableMapOf<String, Job>()
+
+    // 某个标签正在展开时用户又快速切到别的标签：给 150ms 缓冲，真正停留够久的那个标签才发请求，
+    // 划过的中间标签不会各自发一遍网络请求。
+    private var loadTabJob: Job? = null
 
     init {
         viewModelScope.launch {
@@ -294,82 +304,168 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
         }
     }
 
-    // accountId 默认取当前已经激活的账号——loadDetail() 内部自己刷新数据时(比如回滚部署、
+    // accountId 默认取当前已经激活的账号——写操作后主动刷新数据时(比如回滚部署、
     // 增删自定义域名后)不用每次都重新传一遍，只有从首页第一次进入详情页时才需要显式传入。
+    //
+    // 这里只记录当前是哪个 Worker/Pages 项目、重置状态，不发任何网络请求——
+    // 具体请求哪些数据完全由用户点开了哪个标签决定，见下面的 loadTab()。
     fun loadDetail(scriptName: String, isPages: Boolean = false, accountId: String = this.accountId ?: "") {
         if (accountId.isBlank() || !selectAccount(accountId)) {
             _metricsError.value = "账号信息丢失，请返回后重试"; return
         }
-        val e = email ?: return; val k = apiKey ?: return; val a = this.accountId ?: return
-        // 上一个 Worker 的详情请求（不管跑完没跑完）先取消掉，不让它跟这一个抢网络。
-        loadDetailJob?.cancel()
-        loadDetailJob = viewModelScope.launch {
-            // 连续快速点开好几个 Worker 时，只有用户最后真正停留的那个才会走到这里发请求；
-            // 中途划过的那几个会在这 150ms 内被上面的 cancel() 打断，根本不会发出网络请求。
+        if (email == null || apiKey == null) return
+        // 换了个 Worker：把上一个 Worker 还没跑完的请求和"已加载"标记都清掉，
+        // 不然新 Worker 的标签会误以为数据已经加载过、或者被旧请求的结果污染。
+        loadTabJob?.cancel()
+        dataTypeJobs.values.forEach { it.cancel() }
+        dataTypeJobs.clear()
+        loadedDataTypes.clear()
+        currentScriptName = scriptName
+        currentIsPages = isPages
+        _metrics.value = null; _scriptInfo.value = null; _metricsError.value = null
+        _deployments.value = emptyList(); _domains.value = emptyList(); _accessApps.value = emptyList()
+        _settingsDetail.value = null; _deploymentsError.value = null; _domainsError.value = null
+        _accessError.value = null; _settingsError.value = null; _cronTriggers.value = emptyList()
+        _metricsLoading.value = false; _tabLoading.value = false
+    }
+
+    // 标签手风琴展开到 index 时调用（含应用重启后恢复到上次停留的标签）。
+    // 只请求这个标签需要的数据；同一个 Worker 详情会话里，每种数据只会真正请求一次
+    // （见 runOnce），来回切换标签、或者手指划过中间几个标签都不会重复发请求。
+    fun loadTab(index: Int) {
+        val scriptName = currentScriptName ?: return
+        loadTabJob?.cancel()
+        loadTabJob = viewModelScope.launch {
+            // 快速连续切好几个标签时，只有真正停留住的那个会在 150ms 后走到这里发请求。
             delay(150)
-            _metricsLoading.value = true; _tabLoading.value = true
-            _metrics.value = null; _scriptInfo.value = null; _metricsError.value = null
-            _deploymentsError.value = null; _domainsError.value = null
-            _accessError.value = null; _settingsError.value = null
-
-            if (isPages) {
-                val infoResult = CloudflareApi.getPagesProject(e, k, a, scriptName)
-                if (infoResult.success) _scriptInfo.value = infoResult.data
-                else _metricsError.value = infoResult.error
-                _settingsError.value = "Pages 项目暂不支持 Workers 设置接口"
-                _deploymentsError.value = "Pages 部署列表请使用 Cloudflare 控制台（当前版本未接 Pages Deployments API）"
-                _domains.value = emptyList()
-            } else {
-                val infoResult = CloudflareApi.getScriptInfo(e, k, a, scriptName)
-                if (!infoResult.success) {
-                    val pages = CloudflareApi.getPagesProject(e, k, a, scriptName)
-                    if (pages.success) {
-                        _scriptInfo.value = pages.data
-                        _settingsError.value = "Pages 项目暂不支持 Workers 设置接口"
-                        _deploymentsError.value = "Pages 部署列表请使用 Cloudflare 控制台（当前版本未接 Pages Deployments API）"
-                        _domains.value = emptyList()
-                        _metricsLoading.value = false
-                        _tabLoading.value = false
-                        return@launch
-                    }
-                }
-                if (infoResult.success) _scriptInfo.value = infoResult.data
-
-                // 剩下这 6 个请求互不依赖，并发发出——每个一回来就更新自己的 StateFlow，
-                // 不等别的请求，界面上数据会一块块蹦出来，而不是等全部返回才一次性显示。
-                coroutineScope {
-                    launch {
-                        val metricsResult = CloudflareApi.getWorkerMetrics(e, k, a, scriptName)
-                        if (metricsResult.success) _metrics.value = metricsResult.data else _metricsError.value = metricsResult.error
-                        _metricsLoading.value = false
-                    }
-                    launch {
-                        val dep = CloudflareDetailApi.listDeployments(e, k, a, scriptName)
-                        if (dep.success) _deployments.value = dep.data ?: emptyList() else _deploymentsError.value = dep.error
-                    }
-                    launch {
-                        val dom = CloudflareDetailApi.listDomains(e, k, a, scriptName)
-                        if (dom.success) _domains.value = dom.data ?: emptyList() else _domainsError.value = dom.error
-                    }
-                    launch {
-                        val acc = CloudflareDetailApi.listAccessApps(e, k, a)
-                        if (acc.success) _accessApps.value = acc.data ?: emptyList() else _accessError.value = acc.error
-                    }
-                    launch {
-                        val set = CloudflareDetailApi.getSettingsDetail(e, k, a, scriptName)
-                        if (set.success) _settingsDetail.value = set.data else _settingsError.value = set.error
-                    }
-                    launch {
-                        val cron = CloudflareDetailApi.listSchedules(e, k, a, scriptName)
-                        if (cron.success) _cronTriggers.value = cron.data ?: emptyList()
-                    }
-                    // coroutineScope 会等上面 6 个 launch 全部结束才往下走，
-                    // 这里再统一把 tabLoading 关掉（metricsLoading 已经在它自己那个 launch 里提前关了）。
-                }
-                _tabLoading.value = false
-                return@launch
+            when (index) {
+                0 -> { ensureScriptInfo(scriptName); ensureMetrics(scriptName); ensureDomains(scriptName) }
+                1 -> { ensureMetrics(scriptName); ensureDeployments(scriptName) }
+                2 -> ensureDeployments(scriptName)
+                3 -> { ensureScriptInfo(scriptName); ensureSettings(scriptName) }
+                4 -> ensureScriptInfo(scriptName)
+                5 -> ensureDomains(scriptName)
+                6 -> ensureAccess()
+                7 -> { ensureSettings(scriptName); ensureCron(scriptName) }
             }
-            _metricsLoading.value = false; _tabLoading.value = false
+        }
+    }
+
+    /** type 这种数据在当前 Worker 详情会话里只会真正发起一次请求，正在跑或跑完了都直接跳过。 */
+    private fun runOnce(type: String, block: suspend () -> Unit) {
+        if (type in loadedDataTypes || dataTypeJobs.containsKey(type)) return
+        dataTypeJobs[type] = viewModelScope.launch {
+            try {
+                block()
+            } finally {
+                loadedDataTypes += type
+                dataTypeJobs.remove(type)
+            }
+        }
+    }
+
+    private fun ensureScriptInfo(scriptName: String) = runOnce("scriptInfo") {
+        val e = email ?: return@runOnce; val k = apiKey ?: return@runOnce; val a = accountId ?: return@runOnce
+        if (currentIsPages) {
+            val r = CloudflareApi.getPagesProject(e, k, a, scriptName)
+            if (r.success) _scriptInfo.value = r.data else _metricsError.value = r.error
+            markPagesUnsupportedTabs()
+        } else {
+            val r = CloudflareApi.getScriptInfo(e, k, a, scriptName)
+            if (r.success) {
+                _scriptInfo.value = r.data
+            } else {
+                // 有些条目实际是 Pages 项目却出现在 Workers 列表里——兜底再试一次 Pages 接口。
+                val pages = CloudflareApi.getPagesProject(e, k, a, scriptName)
+                if (pages.success) {
+                    currentIsPages = true
+                    _scriptInfo.value = pages.data
+                    markPagesUnsupportedTabs()
+                } else {
+                    _metricsError.value = r.error
+                }
+            }
+        }
+    }
+
+    /** Pages 项目没有部署/域名/设置/Cron 这几个 Workers 专属接口，直接标记，不用真的去请求。 */
+    private fun markPagesUnsupportedTabs() {
+        _settingsError.value = "Pages 项目暂不支持 Workers 设置接口"
+        _deploymentsError.value = "Pages 部署列表请使用 Cloudflare 控制台（当前版本未接 Pages Deployments API）"
+        _domains.value = emptyList()
+        loadedDataTypes += setOf("deployments", "domains", "settings", "cron")
+    }
+
+    private fun ensureMetrics(scriptName: String) = runOnce("metrics") {
+        if (currentIsPages) return@runOnce
+        val e = email ?: return@runOnce; val k = apiKey ?: return@runOnce; val a = accountId ?: return@runOnce
+        _metricsLoading.value = true
+        val r = CloudflareApi.getWorkerMetrics(e, k, a, scriptName)
+        if (r.success) _metrics.value = r.data else _metricsError.value = r.error
+        _metricsLoading.value = false
+    }
+
+    private fun ensureDeployments(scriptName: String) = runOnce("deployments") {
+        if (currentIsPages) return@runOnce
+        val e = email ?: return@runOnce; val k = apiKey ?: return@runOnce; val a = accountId ?: return@runOnce
+        _tabLoading.value = true
+        val r = CloudflareDetailApi.listDeployments(e, k, a, scriptName)
+        if (r.success) _deployments.value = r.data ?: emptyList() else _deploymentsError.value = r.error
+        _tabLoading.value = false
+    }
+
+    private fun ensureDomains(scriptName: String) = runOnce("domains") {
+        if (currentIsPages) return@runOnce
+        val e = email ?: return@runOnce; val k = apiKey ?: return@runOnce; val a = accountId ?: return@runOnce
+        _tabLoading.value = true
+        val r = CloudflareDetailApi.listDomains(e, k, a, scriptName)
+        if (r.success) _domains.value = r.data ?: emptyList() else _domainsError.value = r.error
+        _tabLoading.value = false
+    }
+
+    private fun ensureAccess() = runOnce("access") {
+        if (currentIsPages) return@runOnce
+        val e = email ?: return@runOnce; val k = apiKey ?: return@runOnce; val a = accountId ?: return@runOnce
+        _tabLoading.value = true
+        val r = CloudflareDetailApi.listAccessApps(e, k, a)
+        if (r.success) _accessApps.value = r.data ?: emptyList() else _accessError.value = r.error
+        _tabLoading.value = false
+    }
+
+    private fun ensureSettings(scriptName: String) = runOnce("settings") {
+        if (currentIsPages) return@runOnce
+        val e = email ?: return@runOnce; val k = apiKey ?: return@runOnce; val a = accountId ?: return@runOnce
+        _tabLoading.value = true
+        val r = CloudflareDetailApi.getSettingsDetail(e, k, a, scriptName)
+        if (r.success) _settingsDetail.value = r.data else _settingsError.value = r.error
+        _tabLoading.value = false
+    }
+
+    private fun ensureCron(scriptName: String) = runOnce("cron") {
+        if (currentIsPages) return@runOnce
+        val e = email ?: return@runOnce; val k = apiKey ?: return@runOnce; val a = accountId ?: return@runOnce
+        val r = CloudflareDetailApi.listSchedules(e, k, a, scriptName)
+        if (r.success) _cronTriggers.value = r.data ?: emptyList()
+    }
+
+    /**
+     * 写操作（增删域名、回滚部署、上传新版本……）之后，重新拉某一种数据——但只对
+     * 已经加载过（用户已经点开过对应标签）的类型生效：还没打开过的标签本来就没请求过，
+     * 不用在这里提前把它拉过来，等用户真正点开时 ensure* 自然会请求到最新数据。
+     */
+    private fun forceReload(type: String) {
+        if (type !in loadedDataTypes && type !in dataTypeJobs) return
+        dataTypeJobs[type]?.cancel(); dataTypeJobs.remove(type)
+        loadedDataTypes.remove(type)
+        val scriptName = currentScriptName ?: return
+        when (type) {
+            "scriptInfo" -> ensureScriptInfo(scriptName)
+            "metrics" -> ensureMetrics(scriptName)
+            "deployments" -> ensureDeployments(scriptName)
+            "domains" -> ensureDomains(scriptName)
+            "access" -> ensureAccess()
+            "settings" -> ensureSettings(scriptName)
+            "cron" -> ensureCron(scriptName)
         }
     }
 
@@ -382,7 +478,10 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
     }
 
     fun clearDetail() {
-        loadDetailJob?.cancel(); loadDetailJob = null
+        loadTabJob?.cancel(); loadTabJob = null
+        dataTypeJobs.values.forEach { it.cancel() }; dataTypeJobs.clear()
+        loadedDataTypes.clear()
+        currentScriptName = null; currentIsPages = false
         _metrics.value = null; _scriptInfo.value = null; _metricsError.value = null
         _deployments.value = emptyList(); _domains.value = emptyList(); _accessApps.value = emptyList()
         _settingsDetail.value = null; _deploymentsError.value = null; _domainsError.value = null
@@ -462,7 +561,7 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
         viewModelScope.launch {
             _domainWriteState.value = WriteState.Loading
             val result = CloudflareDetailApi.addCustomDomain(e, k, a, scriptName, hostname, zoneId)
-            if (result.success) { _domainWriteState.value = WriteState.Success("已添加域名"); loadDetail(scriptName) }
+            if (result.success) { _domainWriteState.value = WriteState.Success("已添加域名"); forceReload("domains") }
             else _domainWriteState.value = WriteState.Error(result.error ?: "添加失败")
         }
     }
@@ -473,7 +572,7 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
         viewModelScope.launch {
             _domainWriteState.value = WriteState.Loading
             val result = CloudflareDetailApi.deleteCustomDomain(e, k, a, domainId)
-            if (result.success) { _domainWriteState.value = WriteState.Success("已删除"); loadDetail(scriptName) }
+            if (result.success) { _domainWriteState.value = WriteState.Success("已删除"); forceReload("domains") }
             else _domainWriteState.value = WriteState.Error(result.error ?: "删除失败")
         }
     }
@@ -541,7 +640,7 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
         viewModelScope.launch {
             _deploymentWriteState.value = WriteState.Loading
             val result = CloudflareDetailApi.rollbackDeployment(e, k, a, scriptName, versionId)
-            if (result.success) { _deploymentWriteState.value = WriteState.Success("已回滚"); loadDetail(scriptName) }
+            if (result.success) { _deploymentWriteState.value = WriteState.Success("已回滚"); forceReload("deployments") }
             else _deploymentWriteState.value = WriteState.Error(result.error ?: "回滚失败")
         }
     }
@@ -675,7 +774,12 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
                 val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
                 if (bytes == null || bytes.isEmpty()) { _uploadState.value = UploadState.Error("无法读取文件或文件为空"); return@launch }
                 val result = CloudflareApi.uploadWorkerScript(e, k, a, scriptName, fileName, bytes)
-                if (result.success) { _uploadState.value = UploadState.Success("部署成功：$fileName"); loadDetail(scriptName) }
+                if (result.success) {
+                    _uploadState.value = UploadState.Success("部署成功：$fileName")
+                    // 新版本上传后，脚本信息/部署列表/指标都可能变了，把这三个已加载过的标签强制刷新一遍；
+                    // 没打开过的标签不用管，等用户真正点开的时候会自然去请求。
+                    forceReload("scriptInfo"); forceReload("deployments"); forceReload("metrics")
+                }
                 else _uploadState.value = UploadState.Error(result.error ?: "上传失败")
             } catch (ex: Exception) {
                 _uploadState.value = UploadState.Error(ex.message ?: "上传异常")
