@@ -41,7 +41,7 @@ import kotlinx.coroutines.launch
 
 // 统一的"紧凑行"高度：账号折叠头、统计数字框、搜索框都对齐到这个高度。
 // Worker/Pages 列表项因为要放两行文字，高度会略高于这个值，但比改动前矮很多。
-private val CompactRowHeight = 30.dp
+private val CompactRowHeight = 40.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
