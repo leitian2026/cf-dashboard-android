@@ -7,8 +7,10 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.leitian.cfdashboard.data.*
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -156,6 +158,11 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
     private var accountId: String? = null
     private var accountName: String? = null
 
+    // 正在进行的"加载 Worker 详情"任务。连续快速展开好几个 Worker 时，
+    // 上一个还没跑完的那一整批详情请求（脚本信息+指标+部署+域名+……）会被直接取消，
+    // 不会跟新展开的 Worker 的请求一起挤在网络上，避免越点越卡。
+    private var loadDetailJob: Job? = null
+
     init {
         viewModelScope.launch {
             val accounts = tokenStore.getAccounts()
@@ -294,7 +301,12 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
             _metricsError.value = "账号信息丢失，请返回后重试"; return
         }
         val e = email ?: return; val k = apiKey ?: return; val a = this.accountId ?: return
-        viewModelScope.launch {
+        // 上一个 Worker 的详情请求（不管跑完没跑完）先取消掉，不让它跟这一个抢网络。
+        loadDetailJob?.cancel()
+        loadDetailJob = viewModelScope.launch {
+            // 连续快速点开好几个 Worker 时，只有用户最后真正停留的那个才会走到这里发请求；
+            // 中途划过的那几个会在这 150ms 内被上面的 cancel() 打断，根本不会发出网络请求。
+            delay(150)
             _metricsLoading.value = true; _tabLoading.value = true
             _metrics.value = null; _scriptInfo.value = null; _metricsError.value = null
             _deploymentsError.value = null; _domainsError.value = null
@@ -370,6 +382,7 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
     }
 
     fun clearDetail() {
+        loadDetailJob?.cancel(); loadDetailJob = null
         _metrics.value = null; _scriptInfo.value = null; _metricsError.value = null
         _deployments.value = emptyList(); _domains.value = emptyList(); _accessApps.value = emptyList()
         _settingsDetail.value = null; _deploymentsError.value = null; _domainsError.value = null
