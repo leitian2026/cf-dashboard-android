@@ -1,11 +1,13 @@
 package com.leitian.cfdashboard.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.BugReport
@@ -24,8 +26,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.leitian.cfdashboard.data.CloudflareApi
@@ -34,6 +38,10 @@ import com.leitian.cfdashboard.data.SavedAccount
 import com.leitian.cfdashboard.data.TokenStore
 import com.leitian.cfdashboard.ui.viewmodel.MainViewModel
 import kotlinx.coroutines.launch
+
+// 统一的"紧凑行"高度：账号折叠头、统计数字框、搜索框都对齐到这个高度。
+// Worker/Pages 列表项因为要放两行文字，高度会略高于这个值，但比改动前矮很多。
+private val CompactRowHeight = 30.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -369,14 +377,9 @@ fun HomeScreen(
                 }
 
                 item {
-                    OutlinedTextField(
+                    CompactSearchField(
                         value = searchQuery,
-                        onValueChange = { searchQuery = it },
-                        placeholder = { Text("搜索应用程序") },
-                        leadingIcon = { Icon(Icons.Default.Search, null) },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp),
-                        singleLine = true
+                        onValueChange = { searchQuery = it }
                     )
                 }
 
@@ -480,28 +483,32 @@ private fun AccountGroupHeader(
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+            Modifier.fillMaxWidth().height(CompactRowHeight).padding(horizontal = 16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
                 Icons.Default.Person,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(18.dp)
+                modifier = Modifier.size(16.dp)
             )
             Spacer(Modifier.width(10.dp))
-            Column(Modifier.weight(1f)) {
-                Text(name, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, maxLines = 1)
-                if (email.isNotBlank() && email != name) {
-                    Text(email, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
-                }
-            }
-            Text("$count 个", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            // 名称和邮箱不同时，合并成一行显示（省略号截断），避免变成两行撑高整个框。
+            Text(
+                if (email.isNotBlank() && email != name) "$name（$email）" else name,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 13.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            Text("$count 个", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.width(4.dp))
             Icon(
                 if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
                 contentDescription = if (expanded) "折叠" else "展开",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp)
             )
         }
     }
@@ -526,15 +533,74 @@ private fun PeriodStats(requests: String, cpu: String, errors: String, workersCo
 @Composable
 private fun StatCard(title: String, value: String, modifier: Modifier = Modifier) {
     Card(
-        modifier,
+        modifier.height(CompactRowHeight),
         shape = RoundedCornerShape(10.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
-        Column(Modifier.padding(horizontal = 12.dp, vertical = 7.dp)) {
-            Text(title, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(Modifier.height(2.dp))
-            Text(value, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+        Row(
+            Modifier.fillMaxSize().padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(title, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+            Spacer(Modifier.width(6.dp))
+            Text(
+                value,
+                fontWeight = FontWeight.Bold,
+                fontSize = 13.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+private fun CompactSearchField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier
+            .fillMaxWidth()
+            .height(CompactRowHeight)
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surface)
+            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(12.dp))
+            .padding(horizontal = 12.dp)
+    ) {
+        Row(
+            Modifier.fillMaxSize(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                Icons.Default.Search,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(16.dp)
+            )
+            Spacer(Modifier.width(8.dp))
+            Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                if (value.isEmpty()) {
+                    Text(
+                        "搜索应用程序",
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                BasicTextField(
+                    value = value,
+                    onValueChange = onValueChange,
+                    singleLine = true,
+                    textStyle = LocalTextStyle.current.copy(
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurface
+                    ),
+                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
         }
     }
 }
@@ -580,27 +646,43 @@ private fun AppListItem(app: CloudflareApi.AppItem, expanded: Boolean, onClick: 
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
-        Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             Box(
-                Modifier.size(40.dp).clip(RoundedCornerShape(8.dp)).background(Color(0xFFE8F0FE)),
+                Modifier.size(20.dp).clip(RoundedCornerShape(5.dp)).background(Color(0xFFE8F0FE)),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(Icons.Outlined.Description, null, tint = MaterialTheme.colorScheme.secondary, modifier = Modifier.size(22.dp))
+                Icon(Icons.Outlined.Description, null, tint = MaterialTheme.colorScheme.secondary, modifier = Modifier.size(13.dp))
             }
-            Spacer(Modifier.width(12.dp))
+            Spacer(Modifier.width(10.dp))
+            // 域名和类型合并成一行小字，去掉更新时间列，整体压成两行，跟改动前比矮了不少。
             Column(Modifier.weight(1f)) {
-                Text(app.name, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
-                if (app.domain.isNotBlank()) {
-                    Text(app.domain, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
+                Text(
+                    app.name,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 14.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                val secondLine = if (app.domain.isNotBlank()) "${app.domain} · ${app.subtitle}" else app.subtitle
+                if (secondLine.isNotBlank()) {
+                    Text(
+                        secondLine,
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
-                Text(app.subtitle, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            Text(app.updatedAt, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.width(4.dp))
             Icon(
                 if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
                 contentDescription = if (expanded) "折叠" else "展开",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp)
             )
         }
     }
