@@ -205,7 +205,7 @@ object CloudflareApi {
             }
         }
 
-    private fun fetchWorkersSubdomainPrefix(email: String, apiKey: String, accountId: String): String? {
+    private suspend fun fetchWorkersSubdomainPrefix(email: String, apiKey: String, accountId: String): String? {
         return try {
             val resp = client.newCall(authGet(email, apiKey, "$BASE/accounts/$accountId/workers/subdomain")).await()
             val body = resp.body?.string() ?: ""
@@ -554,7 +554,7 @@ object CloudflareApi {
 
             data class GqlOutcome(val ok: Boolean, val rows: JSONArray, val error: String? = null)
 
-            fun runQuery(query: String): GqlOutcome {
+            suspend fun runQuery(query: String): GqlOutcome {
                 val resp = client.newCall(
                     authPost(email, apiKey, GRAPHQL, JSONObject().put("query", query).toString())
                 ).await()
