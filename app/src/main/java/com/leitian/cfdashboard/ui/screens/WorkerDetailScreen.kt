@@ -84,7 +84,9 @@ fun WorkerDetailContent(
     LaunchedEffect(appName, accountId, expandedTab) {
         if (expandedTab != null) viewModel.loadTab(expandedTab)
     }
-    DisposableEffect(Unit) { onDispose { viewModel.clearDetail() } }
+    // 传 appName 进去做"这次收起是不是我自己"的校验，避免收起旧 Worker 时
+    // 抹掉刚展开的另一个 Worker 的状态（见 clearDetail 上的注释）。
+    DisposableEffect(Unit) { onDispose { viewModel.clearDetail(appName) } }
 
     Column(Modifier.fillMaxWidth()) {
 
