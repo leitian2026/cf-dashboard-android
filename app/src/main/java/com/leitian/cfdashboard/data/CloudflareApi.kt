@@ -1,5 +1,6 @@
 package com.leitian.cfdashboard.data
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -30,6 +31,13 @@ object CloudflareApi {
             .addInterceptor(NetworkLogging.interceptor)
             .connectTimeout(25, TimeUnit.SECONDS)
             .readTimeout(40, TimeUnit.SECONDS)
+            .dispatcher(okhttp3.Dispatcher().apply {
+                // 默认单 host 并发上限只有 5，而打开一个 Worker 详情页会同时对
+                // api.cloudflare.com 发出 6~7 个并发请求，连续点开几个 Worker 时
+                // 请求很快排队排到几十个，后面的就会一直转圈圈等前面的跑完。调大这两个值。
+                maxRequestsPerHost = 32
+                maxRequests = 64
+            })
             .build()
     }
 
@@ -180,7 +188,7 @@ object CloudflareApi {
         withContext(Dispatchers.IO) {
             try {
                 val req = authGet(email, apiKey, "$BASE/accounts")
-                val resp = client.newCall(req).execute()
+                val resp = client.newCall(req).await()
                 val body = resp.body?.string() ?: ""
                 if (!resp.isSuccessful) return@withContext ApiResult(false, error = "验证失败 (${resp.code}): ${truncate(body)}")
                 val json = JSONObject(body)
@@ -192,14 +200,14 @@ object CloudflareApi {
                 if (arr.length() == 0) return@withContext ApiResult(false, error = "未找到账号")
                 val o = arr.getJSONObject(0)
                 ApiResult(true, Account(o.optString("id"), o.optString("name")))
-            } catch (e: Exception) {
+            } catch (e: CancellationException) { throw e } catch (e: Exception) {
                 ApiResult(false, error = e.message ?: "网络错误")
             }
         }
 
     private fun fetchWorkersSubdomainPrefix(email: String, apiKey: String, accountId: String): String? {
         return try {
-            val resp = client.newCall(authGet(email, apiKey, "$BASE/accounts/$accountId/workers/subdomain")).execute()
+            val resp = client.newCall(authGet(email, apiKey, "$BASE/accounts/$accountId/workers/subdomain")).await()
             val body = resp.body?.string() ?: ""
             if (!resp.isSuccessful) return null
             val json = JSONObject(body)
@@ -218,7 +226,7 @@ object CloudflareApi {
             try {
                 val list = mutableListOf<AppItem>()
                 val workersPrefix = fetchWorkersSubdomainPrefix(email, apiKey, accountId)
-                val workersResp = client.newCall(authGet(email, apiKey, "$BASE/accounts/$accountId/workers/scripts")).execute()
+                val workersResp = client.newCall(authGet(email, apiKey, "$BASE/accounts/$accountId/workers/scripts")).await()
                 val workersBody = workersResp.body?.string() ?: ""
                 if (workersResp.isSuccessful) {
                     val arr = JSONObject(workersBody).optJSONArray("result") ?: JSONArray()
@@ -247,7 +255,7 @@ object CloudflareApi {
                 } else {
                     ApiResult(false, error = "加载 Workers 列表失败（${workersResp.code}）")
                 }
-            } catch (e: Exception) {
+            } catch (e: CancellationException) { throw e } catch (e: Exception) {
                 ApiResult(false, error = e.message ?: "网络错误")
             }
         }
@@ -256,7 +264,7 @@ object CloudflareApi {
         withContext(Dispatchers.IO) {
             try {
                 val list = mutableListOf<AppItem>()
-                val pagesResp = client.newCall(authGet(email, apiKey, "$BASE/accounts/$accountId/pages/projects")).execute()
+                val pagesResp = client.newCall(authGet(email, apiKey, "$BASE/accounts/$accountId/pages/projects")).await()
                 val pagesBody = pagesResp.body?.string() ?: ""
                 if (pagesResp.isSuccessful) {
                     val arr = JSONObject(pagesBody).optJSONArray("result") ?: JSONArray()
@@ -281,7 +289,7 @@ object CloudflareApi {
                 } else {
                     ApiResult(false, error = "加载 Pages 列表失败（${pagesResp.code}）")
                 }
-            } catch (e: Exception) {
+            } catch (e: CancellationException) { throw e } catch (e: Exception) {
                 ApiResult(false, error = e.message ?: "网络错误")
             }
         }
@@ -312,14 +320,14 @@ object CloudflareApi {
                     .build()
                 val req = Request.Builder().url("$BASE/accounts/$accountId/workers/scripts/$scriptName")
                     .addHeader("X-Auth-Email", email).addHeader("X-Auth-Key", apiKey).put(body).build()
-                val resp = client.newCall(req).execute()
+                val resp = client.newCall(req).await()
                 val respBody = resp.body?.string() ?: ""
                 if (!resp.isSuccessful) {
                     val err = try { JSONObject(respBody).optJSONArray("errors")?.optJSONObject(0)?.optString("message") } catch (_: Exception) { null }
                     return@withContext ApiResult(false, error = err ?: "创建失败 (${resp.code})")
                 }
                 ApiResult(true, Unit)
-            } catch (e: Exception) {
+            } catch (e: CancellationException) { throw e } catch (e: Exception) {
                 ApiResult(false, error = e.message ?: "网络错误")
             }
         }
@@ -339,7 +347,7 @@ object CloudflareApi {
             val settingsReq = Request.Builder()
                 .url("$BASE/accounts/$accountId/workers/scripts/$scriptName/settings")
                 .addHeader("X-Auth-Email", email).addHeader("X-Auth-Key", apiKey).get().build()
-            val settingsResp = client.newCall(settingsReq).execute()
+            val settingsResp = client.newCall(settingsReq).await()
             val settingsBody = settingsResp.body?.string() ?: ""
             if (!settingsResp.isSuccessful) {
                 return@withContext ApiResult(false, error = "上传前读取现有设置失败 (${settingsResp.code})，为避免误清空其他配置已取消上传")
@@ -380,14 +388,14 @@ object CloudflareApi {
                 .build()
             val req = Request.Builder().url("$BASE/accounts/$accountId/workers/scripts/$scriptName")
                 .addHeader("X-Auth-Email", email).addHeader("X-Auth-Key", apiKey).put(body).build()
-            val resp = client.newCall(req).execute()
+            val resp = client.newCall(req).await()
             val respBody = resp.body?.string() ?: ""
             if (!resp.isSuccessful) {
                 val err = try { JSONObject(respBody).optJSONArray("errors")?.optJSONObject(0)?.optString("message") } catch (_: Exception) { null }
                 return@withContext ApiResult(false, error = err ?: "上传失败 (${resp.code})")
             }
             ApiResult(true, Unit)
-        } catch (e: Exception) {
+        } catch (e: CancellationException) { throw e } catch (e: Exception) {
             ApiResult(false, error = e.message ?: "网络错误")
         }
     }
@@ -406,7 +414,7 @@ object CloudflareApi {
     ): ApiResult<Pair<String, ByteArray>> = withContext(Dispatchers.IO) {
         try {
             val req = authGet(email, apiKey, "$BASE/accounts/$accountId/workers/scripts/$scriptName")
-            val resp = client.newCall(req).execute()
+            val resp = client.newCall(req).await()
             val body = resp.body
             if (!resp.isSuccessful) {
                 val text = body?.string() ?: ""
@@ -444,7 +452,7 @@ object CloudflareApi {
                 if (bytes.isEmpty()) ApiResult(false, error = "脚本内容为空")
                 else ApiResult(true, defaultName to bytes)
             }
-        } catch (e: Exception) {
+        } catch (e: CancellationException) { throw e } catch (e: Exception) {
             ApiResult(false, error = e.message ?: "网络错误")
         }
     }
@@ -465,7 +473,7 @@ object CloudflareApi {
                       }
                     }
                 """.trimIndent()
-                val resp = client.newCall(authPost(email, apiKey, GRAPHQL, JSONObject().put("query", query).toString())).execute()
+                val resp = client.newCall(authPost(email, apiKey, GRAPHQL, JSONObject().put("query", query).toString())).await()
                 val body = resp.body?.string() ?: ""
                 if (!resp.isSuccessful) return@withContext ApiResult(false, error = "统计查询失败 (${resp.code})")
                 val json = JSONObject(body)
@@ -481,7 +489,7 @@ object CloudflareApi {
                     if (cpuUs > 0) { cpuSum += cpuUs / 1000.0; cpuCnt++ }
                 }
                 ApiResult(true, AccountStats(reqs, errs, if (cpuCnt > 0) cpuSum / cpuCnt else 0.0))
-            } catch (e: Exception) {
+            } catch (e: CancellationException) { throw e } catch (e: Exception) {
                 ApiResult(false, error = e.message ?: "网络错误")
             }
         }
@@ -549,7 +557,7 @@ object CloudflareApi {
             fun runQuery(query: String): GqlOutcome {
                 val resp = client.newCall(
                     authPost(email, apiKey, GRAPHQL, JSONObject().put("query", query).toString())
-                ).execute()
+                ).await()
                 val body = resp.body?.string() ?: ""
                 if (!resp.isSuccessful) {
                     return GqlOutcome(false, JSONArray(), "指标查询失败 (${resp.code})")
@@ -673,7 +681,7 @@ object CloudflareApi {
                     errorsChangePct = changePct(totalErr, prevErr)
                 )
             )
-        } catch (e: Exception) {
+        } catch (e: CancellationException) { throw e } catch (e: Exception) {
             ApiResult(false, error = e.message ?: "网络错误")
         }
     }
@@ -684,7 +692,7 @@ object CloudflareApi {
         try {
             val resp = client.newCall(
                 authGet(email, apiKey, "$BASE/accounts/$accountId/pages/projects/$projectName")
-            ).execute()
+            ).await()
             val body = resp.body?.string() ?: ""
             if (!resp.isSuccessful) return@withContext ApiResult(false, error = "HTTP ${resp.code}")
             val json = JSONObject(body)
@@ -696,7 +704,7 @@ object CloudflareApi {
                 "$projectName.pages.dev"
             }
             ApiResult(true, ScriptInfo(subdomain, false, false, 0))
-        } catch (e: Exception) {
+        } catch (e: CancellationException) { throw e } catch (e: Exception) {
             ApiResult(false, error = e.message ?: "网络错误")
         }
     }
@@ -705,7 +713,11 @@ object CloudflareApi {
         email: String, apiKey: String, accountId: String, scriptName: String
     ): ApiResult<ScriptInfo> = withContext(Dispatchers.IO) {
         try {
-            val resp = client.newCall(authGet(email, apiKey, "$BASE/accounts/$accountId/workers/scripts/$scriptName")).execute()
+            // 注意：GET .../workers/scripts/{name}（不带 /settings）拿到的是脚本源码本身，
+            // 多文件/模块化的 Worker 这个接口返回的是 multipart/form-data（body 以 --边界串 开头），
+            // 直接当 JSON 解析会报 "cannot be converted to JSONObject"。元数据（bindings/logpush）
+            // 要用 .../settings 这个专门的接口。
+            val resp = client.newCall(authGet(email, apiKey, "$BASE/accounts/$accountId/workers/scripts/$scriptName/settings")).await()
             val body = resp.body?.string() ?: ""
             if (!resp.isSuccessful) return@withContext ApiResult(false, error = "HTTP ${resp.code}")
             val json = JSONObject(body)
@@ -713,9 +725,9 @@ object CloudflareApi {
             val result = json.optJSONObject("result") ?: JSONObject()
             val subdomain = result.optString("id", scriptName) + ".workers.dev"
             val bindings = result.optJSONArray("bindings")
-            val logs = result.optJSONObject("logpush") != null || result.optBoolean("logpush", false)
+            val logs = result.optBoolean("logpush", false)
             ApiResult(true, ScriptInfo(subdomain, logs, false, bindings?.length() ?: 0))
-        } catch (e: Exception) {
+        } catch (e: CancellationException) { throw e } catch (e: Exception) {
             ApiResult(false, error = e.message ?: "网络错误")
         }
     }
