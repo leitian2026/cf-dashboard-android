@@ -477,7 +477,17 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
         }
     }
 
-    fun clearDetail() {
+    /**
+     * 手风琴同一时间只展开一个 Worker，但"收起旧的"和"展开新的"是两个独立 Compose 节点各自的
+     * 生命周期事件——旧节点的 onDispose 有时会在新节点的 LaunchedEffect 之后才跑（尤其是切到
+     * 列表里位置更靠前的另一个账号的 Worker 时）。而 currentScriptName/loadTabJob 这些状态是
+     * ViewModel 单例共享的，如果旧节点的 dispose 晚到，会把刚展开的新 Worker 的状态/请求整个抹掉，
+     * 表现就是"点另一个 Worker 后指标一直转圈、根本拉不到数据"。
+     * 加一个 expectedScriptName 做校验：只有当共享状态确实还是"我"这个 Worker 的时候才真的清，
+     * 如果已经被新 Worker 接管了，这次 dispose 就当没发生。
+     */
+    fun clearDetail(expectedScriptName: String? = null) {
+        if (expectedScriptName != null && currentScriptName != expectedScriptName) return
         loadTabJob?.cancel(); loadTabJob = null
         dataTypeJobs.values.forEach { it.cancel() }; dataTypeJobs.clear()
         loadedDataTypes.clear()
