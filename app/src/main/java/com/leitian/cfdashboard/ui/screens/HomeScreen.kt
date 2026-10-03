@@ -26,12 +26,8 @@ import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.outlined.Bolt
-import androidx.compose.material.icons.outlined.Dns
 import androidx.compose.material.icons.outlined.Description
-import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Logout
-import androidx.compose.material.icons.outlined.SwapVert
 import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -444,33 +440,35 @@ fun HomeScreen(
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 if (multiAccount) {
-                    // 多账号：所有账号的"今日"统计并排放在同一行里，各占一列，
-                    // 而不是像之前那样一个账号一整块、上下堆叠。
+                    // 多账号：2 个账号并排，3 个及以上上下堆叠（窄屏放不下 3 列）。
                     item(key = "stats-row") {
-                        Row(
-                            Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            accounts.forEach { acc ->
-                                val accStats = statsByAccount[acc.accountId]
-                                val accError = statsErrorByAccount[acc.accountId]
-                                Column(Modifier.weight(1f)) {
-                                    PeriodStats(
-                                        header = "${acc.accountName.ifBlank { acc.email }} · 今日",
-                                        requests = accStats?.let { CloudflareApi.formatCount(it.requests) } ?: "—",
-                                        cpu = accStats?.let { CloudflareApi.formatCpu(it.cpuTimeMs) } ?: "—",
-                                        errors = accStats?.errors?.toString() ?: "—",
-                                        workersCount = apps.count { !it.isPages && it.accountId == acc.accountId }.toString()
-                                    )
-                                    if (accError != null) {
-                                        Spacer(Modifier.height(4.dp))
-                                        Text(
-                                            "统计提示: $accError",
-                                            fontSize = 12.sp,
-                                            color = MaterialTheme.colorScheme.error
-                                        )
-                                    }
+                        // 2 个账号并排；3 个及以上每个账号占一整行，避免一列只有几十 dp 宽。
+                        val statsLayoutModifier = Modifier.fillMaxWidth()
+                        @Composable
+                        fun AccStats(acc: SavedAccount, mod: Modifier) {
+                            val accStats = statsByAccount[acc.accountId]
+                            val accError = statsErrorByAccount[acc.accountId]
+                            Column(mod) {
+                                PeriodStats(
+                                    header = "${acc.accountName.ifBlank { acc.email }} · 今日",
+                                    requests = accStats?.let { CloudflareApi.formatCount(it.requests) } ?: "—",
+                                    cpu = accStats?.let { CloudflareApi.formatCpu(it.cpuTimeMs) } ?: "—",
+                                    errors = accStats?.errors?.toString() ?: "—",
+                                    workersCount = apps.count { !it.isPages && it.accountId == acc.accountId }.toString()
+                                )
+                                if (accError != null) {
+                                    Spacer(Modifier.height(4.dp))
+                                    Text("统计提示: $accError", fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
                                 }
+                            }
+                        }
+                        if (accounts.size <= 2) {
+                            Row(statsLayoutModifier, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                accounts.forEach { acc -> AccStats(acc, Modifier.weight(1f)) }
+                            }
+                        } else {
+                            Column(statsLayoutModifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                accounts.forEach { acc -> AccStats(acc, Modifier.fillMaxWidth()) }
                             }
                         }
                     }
@@ -654,20 +652,19 @@ private fun PeriodStats(header: String?, requests: String, cpu: String, errors: 
             Text(header, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(bottom = 6.dp))
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            StatCard(Icons.Outlined.SwapVert, StatRequestsColor, "请求", requests, Modifier.weight(1f))
-            StatCard(Icons.Outlined.Bolt, StatCpuColor, "CPU 时间", cpu, Modifier.weight(1f))
+            StatCard(StatRequestsColor, "请求", requests, Modifier.weight(1f))
+            StatCard(StatCpuColor, "CPU 时间", cpu, Modifier.weight(1f))
         }
         Spacer(Modifier.height(6.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            StatCard(Icons.Outlined.ErrorOutline, StatErrorColor, "错误", errors, Modifier.weight(1f))
-            StatCard(Icons.Outlined.Dns, StatWorkersColor, "Workers 数量", workersCount, Modifier.weight(1f))
+            StatCard(StatErrorColor, "错误", errors, Modifier.weight(1f))
+            StatCard(StatWorkersColor, "Workers", workersCount, Modifier.weight(1f))
         }
     }
 }
 
 @Composable
 private fun StatCard(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
     tint: Color,
     title: String,
     value: String,
@@ -679,28 +676,20 @@ private fun StatCard(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = CardElevation)
     ) {
-        Row(
-            Modifier.fillMaxSize().padding(horizontal = 10.dp),
-            verticalAlignment = Alignment.CenterVertically
+        // 不再放左侧小图标框，把整张卡的宽度都留给文字，窄屏（多账号并排）也不会被省略号吃掉。
+        Column(
+            Modifier.fillMaxSize().padding(horizontal = 12.dp),
+            verticalArrangement = Arrangement.Center
         ) {
-            Box(
-                Modifier.size(26.dp).clip(RoundedCornerShape(8.dp)).background(tint.copy(alpha = 0.12f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(icon, null, tint = tint, modifier = Modifier.size(15.dp))
-            }
-            Spacer(Modifier.width(8.dp))
-            Column(Modifier.weight(1f)) {
-                Text(title, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(
-                    value,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 15.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    color = tint
-                )
-            }
+            Text(title, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                value,
+                fontWeight = FontWeight.Bold,
+                fontSize = 15.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                color = tint
+            )
         }
     }
 }
