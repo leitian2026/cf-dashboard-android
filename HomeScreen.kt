@@ -1,7 +1,14 @@
 package com.leitian.cfdashboard.ui.screens
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -12,6 +19,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.FileDownload
+import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Person
@@ -19,15 +28,19 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Logout
+import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -37,11 +50,22 @@ import com.leitian.cfdashboard.data.NetworkLogging
 import com.leitian.cfdashboard.data.SavedAccount
 import com.leitian.cfdashboard.data.TokenStore
 import com.leitian.cfdashboard.ui.viewmodel.MainViewModel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-// 统一的"紧凑行"高度：账号折叠头、统计数字框、搜索框都对齐到这个高度。
-// Worker/Pages 列表项因为要放两行文字，高度会略高于这个值，但比改动前矮很多。
+// 统一的"紧凑行"高度：账号折叠头、搜索框都对齐到这个高度。
 private val CompactRowHeight = 40.dp
+// 统计数字卡片比紧凑行略高一点，好放下图标，看起来更有 App 的质感而不是网页表格。
+private val StatCardHeight = 48.dp
+
+// 每种统计指标一个强调色，图标用小色块装饰，弱化"纯文字表格"的网页感。
+private val StatRequestsColor = Color(0xFF0F6E56)
+private val StatCpuColor = Color(0xFF534AB7)
+private val StatErrorColor = Color(0xFF993C1D)
+private val StatWorkersColor = Color(0xFF185FA5)
+
+// 卡片统一用的轻微投影，浅色主题下能和背景拉开一点层次。
+private val CardElevation = 1.5.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -61,6 +85,18 @@ fun HomeScreen(
     val multiAccount = accounts.size > 1
 
     var searchQuery by remember { mutableStateOf("") }
+    // 搜索框放到顶栏里，跟账号登录图标同一排；点搜索图标后顶栏标题切换成输入框。
+    var searchActive by remember { mutableStateOf(false) }
+    val searchFocusRequester = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
+    // 点击搜索图标展开输入框后，自动把光标定位进去并弹出键盘，不用用户再点一下。
+    LaunchedEffect(searchActive) {
+        if (searchActive) {
+            delay(80)
+            searchFocusRequester.requestFocus()
+            keyboardController?.show()
+        }
+    }
     var showCreateDialog by remember { mutableStateOf(false) }
     var newWorkerName by remember { mutableStateOf("") }
     var showAccountsMenu by remember { mutableStateOf(false) }
@@ -84,13 +120,39 @@ fun HomeScreen(
     var collapsedAccountIds by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
     var collapsedLoaded by rememberSaveable { mutableStateOf(false) }
     // 当前展开详情的 Worker（同一时间只展开一个，跟点击进详情页一次只能看一个是一样的效果）。
-    // 展开/收起都是原地进行，不再跳转到别的页面。
+    // 展开/收起都是原地进行，不再跳转到别的页面；跟账号折叠一样持久化到 DataStore，
+    // 重启 App 后保持上次展开的那一个（如果它还在列表里）。
     var expandedAppKey by rememberSaveable { mutableStateOf<String?>(null) }
+    var expandedAppKeyLoaded by rememberSaveable { mutableStateOf(false) }
+    // Worker 详情里停留的标签页下标：改成整个 App 唯一一份状态（不再按 Worker 分别记），
+    // 不管展开哪个 Worker，看到的都是同一个"当前展开到哪个标签"的状态——
+    // 比如上次在别的 Worker 里点开了"指标"，换一个 Worker 展开，也是直接停在"指标"。
+    // null 表示"没有任何标签展开"；持久化到 DataStore 时用 -1 表示 null。
+    var detailTabIndex by rememberSaveable { mutableStateOf<Int?>(0) }
+    var detailTabIndexLoaded by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         if (!collapsedLoaded) {
             collapsedAccountIds = ArrayList(tokenStore.getCollapsedAccountIds())
             collapsedLoaded = true
         }
+        if (!expandedAppKeyLoaded) {
+            expandedAppKey = tokenStore.getExpandedAppKey()
+            expandedAppKeyLoaded = true
+        }
+        if (!detailTabIndexLoaded) {
+            detailTabIndex = tokenStore.getDetailTabIndex().let { if (it < 0) null else it }
+            detailTabIndexLoaded = true
+        }
+    }
+
+    fun setExpandedAppKey(key: String?) {
+        expandedAppKey = key
+        scope.launch { tokenStore.setExpandedAppKey(key) }
+    }
+
+    fun setDetailTabIndex(index: Int?) {
+        detailTabIndex = index
+        scope.launch { tokenStore.setDetailTabIndex(index ?: -1) }
     }
 
     val filtered by remember(apps, searchQuery) {
@@ -210,178 +272,203 @@ fun HomeScreen(
 
     Scaffold(
         topBar = {
+          // Surface 的 shadowElevation 让顶栏跟下面的内容区分出一条真实投影，
+          // 而不是跟背景齐平的一整块网页布局。
+          Surface(shadowElevation = 3.dp, color = MaterialTheme.colorScheme.surface) {
             TopAppBar(
                 title = {
-                    Column {
-                        Text("Workers 和 Pages", fontWeight = FontWeight.Bold, fontSize = 20.sp)
-                        Text(
-                            "构建和部署无服务器功能、站点和全栈应用程序。",
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                    if (searchActive) {
+                        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
+                            if (searchQuery.isEmpty()) {
+                                Text(
+                                    "搜索 Workers 和 Pages",
+                                    fontSize = 16.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            BasicTextField(
+                                value = searchQuery,
+                                onValueChange = { searchQuery = it },
+                                singleLine = true,
+                                textStyle = LocalTextStyle.current.copy(
+                                    fontSize = 16.sp,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                ),
+                                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                                modifier = Modifier.fillMaxWidth().focusRequester(searchFocusRequester)
+                            )
+                        }
+                    } else {
+                        Text("Workers 和 Pages", fontWeight = FontWeight.Bold, fontSize = 18.sp)
                     }
                 },
                 actions = {
-                    Box {
-                        IconButton(onClick = { showAccountsMenu = true }) {
+                    if (searchActive) {
+                        IconButton(onClick = {
+                            searchActive = false
+                            searchQuery = ""
+                        }) {
+                            Icon(Icons.Default.Close, contentDescription = "关闭搜索")
+                        }
+                    } else {
+                        IconButton(onClick = { searchActive = true }) {
                             Icon(
-                                Icons.Default.Person,
-                                contentDescription = "账号",
-                                tint = if (multiAccount) MaterialTheme.colorScheme.primary
-                                       else MaterialTheme.colorScheme.onSurfaceVariant
+                                Icons.Default.Search,
+                                contentDescription = "搜索 Workers 和 Pages",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
-                        DropdownMenu(expanded = showAccountsMenu, onDismissRequest = { showAccountsMenu = false }) {
-                            Text(
-                                "已登录账号",
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                                fontSize = 12.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            accounts.forEach { acc ->
+                        Box {
+                            IconButton(onClick = { showAccountsMenu = true }) {
+                                Icon(
+                                    Icons.Default.Person,
+                                    contentDescription = "账号",
+                                    tint = if (multiAccount) MaterialTheme.colorScheme.primary
+                                           else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            DropdownMenu(expanded = showAccountsMenu, onDismissRequest = { showAccountsMenu = false }) {
+                                Text(
+                                    "已登录账号",
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                accounts.forEach { acc ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                modifier = Modifier.width(220.dp)
+                                            ) {
+                                                Column(Modifier.weight(1f)) {
+                                                    Text(acc.accountName.ifBlank { acc.email }, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                                                    Text(acc.email, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                                }
+                                                IconButton(
+                                                    onClick = { viewModel.removeAccount(acc.accountId) },
+                                                    modifier = Modifier.size(28.dp)
+                                                ) {
+                                                    Icon(Icons.Default.Close, contentDescription = "移除账号", modifier = Modifier.size(16.dp))
+                                                }
+                                            }
+                                        },
+                                        onClick = {}
+                                    )
+                                }
+                                HorizontalDivider()
+                                DropdownMenuItem(
+                                    text = { Text("添加账号") },
+                                    leadingIcon = { Icon(Icons.Default.Add, null) },
+                                    onClick = { showAccountsMenu = false; onAddAccount() }
+                                )
+                            }
+                        }
+                        Box {
+                            IconButton(onClick = { showDebugMenu = true }) {
+                                Icon(
+                                    Icons.Default.BugReport,
+                                    contentDescription = "调试",
+                                    tint = if (verboseLogging) MaterialTheme.colorScheme.primary
+                                           else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            DropdownMenu(expanded = showDebugMenu, onDismissRequest = { showDebugMenu = false }) {
                                 DropdownMenuItem(
                                     text = {
                                         Row(
                                             verticalAlignment = Alignment.CenterVertically,
-                                            modifier = Modifier.width(220.dp)
+                                            modifier = Modifier.width(240.dp)
                                         ) {
                                             Column(Modifier.weight(1f)) {
-                                                Text(acc.accountName.ifBlank { acc.email }, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                                                Text(acc.email, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                                Text("详细网络日志", fontSize = 13.sp)
+                                                Text(
+                                                    "排查问题时打开，完整请求/响应会打到 Logcat",
+                                                    fontSize = 11.sp,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
                                             }
-                                            IconButton(
-                                                onClick = { viewModel.removeAccount(acc.accountId) },
-                                                modifier = Modifier.size(28.dp)
-                                            ) {
-                                                Icon(Icons.Default.Close, contentDescription = "移除账号", modifier = Modifier.size(16.dp))
-                                            }
+                                            Spacer(Modifier.width(8.dp))
+                                            Switch(
+                                                checked = verboseLogging,
+                                                onCheckedChange = { checked ->
+                                                    verboseLogging = checked
+                                                    scope.launch { NetworkLogging.setEnabled(context, checked) }
+                                                }
+                                            )
                                         }
                                     },
                                     onClick = {}
                                 )
                             }
-                            HorizontalDivider()
-                            DropdownMenuItem(
-                                text = { Text("添加账号") },
-                                leadingIcon = { Icon(Icons.Default.Add, null) },
-                                onClick = { showAccountsMenu = false; onAddAccount() }
-                            )
+                        }
+                        IconButton(onClick = onLogout) {
+                            Icon(Icons.Outlined.Logout, contentDescription = "退出全部账号")
+                        }
+                        IconButton(
+                            onClick = {
+                                viewModel.loadApps()
+                                viewModel.loadAccountStats()
+                            },
+                            enabled = !isLoading
+                        ) {
+                            if (isLoading) {
+                                CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                            } else {
+                                Icon(Icons.Default.Refresh, contentDescription = "刷新")
+                            }
+                        }
+                        IconButton(
+                            onClick = {
+                                viewModel.clearCreateError()
+                                selectedCreateAccountId = accounts.firstOrNull()?.accountId ?: ""
+                                showCreateDialog = true
+                            }
+                        ) {
+                            Icon(Icons.Default.Add, contentDescription = "创建", tint = MaterialTheme.colorScheme.primary)
                         }
                     }
-                    Box {
-                        IconButton(onClick = { showDebugMenu = true }) {
-                            Icon(
-                                Icons.Default.BugReport,
-                                contentDescription = "调试",
-                                tint = if (verboseLogging) MaterialTheme.colorScheme.primary
-                                       else MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        DropdownMenu(expanded = showDebugMenu, onDismissRequest = { showDebugMenu = false }) {
-                            DropdownMenuItem(
-                                text = {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.width(240.dp)
-                                    ) {
-                                        Column(Modifier.weight(1f)) {
-                                            Text("详细网络日志", fontSize = 13.sp)
-                                            Text(
-                                                "排查问题时打开，完整请求/响应会打到 Logcat",
-                                                fontSize = 11.sp,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                        }
-                                        Spacer(Modifier.width(8.dp))
-                                        Switch(
-                                            checked = verboseLogging,
-                                            onCheckedChange = { checked ->
-                                                verboseLogging = checked
-                                                scope.launch { NetworkLogging.setEnabled(context, checked) }
-                                            }
-                                        )
-                                    }
-                                },
-                                onClick = {}
-                            )
-                        }
-                    }
-                    IconButton(onClick = onLogout) {
-                        Icon(Icons.Outlined.Logout, contentDescription = "退出全部账号")
-                    }
-                    IconButton(
-                        onClick = {
-                            viewModel.loadApps()
-                            viewModel.loadAccountStats()
-                        },
-                        enabled = !isLoading
-                    ) {
-                        if (isLoading) {
-                            CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                        } else {
-                            Icon(Icons.Default.Refresh, contentDescription = "刷新")
-                        }
-                    }
-                    Button(
-                        onClick = {
-                            viewModel.clearCreateError()
-                            selectedCreateAccountId = accounts.firstOrNull()?.accountId ?: ""
-                            showCreateDialog = true
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-                        shape = RoundedCornerShape(8.dp),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
-                    ) {
-                        Icon(Icons.Default.Add, null, Modifier.size(16.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("创建", fontSize = 13.sp)
-                    }
-                    Spacer(Modifier.width(8.dp))
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
             )
+          }
         }
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding).background(MaterialTheme.colorScheme.background)) {
             LazyColumn(
-                contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 if (multiAccount) {
-                    // 多账号：所有账号的"今日"统计并排放在同一行里，各占一列，
-                    // 而不是像之前那样一个账号一整块、上下堆叠。
+                    // 多账号：2 个账号并排，3 个及以上上下堆叠（窄屏放不下 3 列）。
                     item(key = "stats-row") {
-                        Row(
-                            Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            accounts.forEach { acc ->
-                                val accStats = statsByAccount[acc.accountId]
-                                val accError = statsErrorByAccount[acc.accountId]
-                                Column(Modifier.weight(1f)) {
-                                    Text(
-                                        acc.accountName.ifBlank { acc.email },
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.padding(bottom = 8.dp)
-                                    )
-                                    PeriodStats(
-                                        requests = accStats?.let { CloudflareApi.formatCount(it.requests) } ?: "—",
-                                        cpu = accStats?.let { CloudflareApi.formatCpu(it.cpuTimeMs) } ?: "—",
-                                        errors = accStats?.errors?.toString() ?: "—",
-                                        workersCount = apps.count { !it.isPages && it.accountId == acc.accountId }.toString()
-                                    )
-                                    if (accError != null) {
-                                        Spacer(Modifier.height(4.dp))
-                                        Text(
-                                            "统计提示: $accError",
-                                            fontSize = 12.sp,
-                                            color = MaterialTheme.colorScheme.error
-                                        )
-                                    }
+                        // 2 个账号并排；3 个及以上每个账号占一整行，避免一列只有几十 dp 宽。
+                        val statsLayoutModifier = Modifier.fillMaxWidth()
+                        @Composable
+                        fun AccStats(acc: SavedAccount, mod: Modifier) {
+                            val accStats = statsByAccount[acc.accountId]
+                            val accError = statsErrorByAccount[acc.accountId]
+                            Column(mod) {
+                                PeriodStats(
+                                    header = "${acc.accountName.ifBlank { acc.email }} · 今日",
+                                    requests = accStats?.let { CloudflareApi.formatCount(it.requests) } ?: "—",
+                                    cpu = accStats?.let { CloudflareApi.formatCpu(it.cpuTimeMs) } ?: "—",
+                                    errors = accStats?.errors?.toString() ?: "—",
+                                    workersCount = apps.count { !it.isPages && it.accountId == acc.accountId }.toString()
+                                )
+                                if (accError != null) {
+                                    Spacer(Modifier.height(4.dp))
+                                    Text("统计提示: $accError", fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
                                 }
+                            }
+                        }
+                        if (accounts.size <= 2) {
+                            Row(statsLayoutModifier, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                accounts.forEach { acc -> AccStats(acc, Modifier.weight(1f)) }
+                            }
+                        } else {
+                            Column(statsLayoutModifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                accounts.forEach { acc -> AccStats(acc, Modifier.fillMaxWidth()) }
                             }
                         }
                     }
@@ -391,6 +478,7 @@ fun HomeScreen(
                         val accError = statsErrorByAccount[acc.accountId]
                         Column {
                             PeriodStats(
+                                header = "今日（UTC）",
                                 requests = accStats?.let { CloudflareApi.formatCount(it.requests) } ?: "—",
                                 cpu = accStats?.let { CloudflareApi.formatCpu(it.cpuTimeMs) } ?: "—",
                                 errors = accStats?.errors?.toString() ?: "—",
@@ -406,13 +494,6 @@ fun HomeScreen(
                             }
                         }
                     }
-                }
-
-                item {
-                    CompactSearchField(
-                        value = searchQuery,
-                        onValueChange = { searchQuery = it }
-                    )
                 }
 
                 if (isLoading && apps.isEmpty()) {
@@ -436,9 +517,11 @@ fun HomeScreen(
                         AppRow(
                             app = app,
                             expanded = expandedAppKey == key,
-                            onToggle = { expandedAppKey = if (expandedAppKey == key) null else key },
-                            onCollapse = { expandedAppKey = null },
-                            viewModel = viewModel
+                            onToggle = { setExpandedAppKey(if (expandedAppKey == key) null else key) },
+                            onCollapse = { setExpandedAppKey(null) },
+                            viewModel = viewModel,
+                            selectedTab = detailTabIndex,
+                            onTabSelected = ::setDetailTabIndex
                         )
                     }
                 } else {
@@ -482,9 +565,11 @@ fun HomeScreen(
                                     AppRow(
                                         app = app,
                                         expanded = expandedAppKey == key,
-                                        onToggle = { expandedAppKey = if (expandedAppKey == key) null else key },
-                                        onCollapse = { expandedAppKey = null },
-                                        viewModel = viewModel
+                                        onToggle = { setExpandedAppKey(if (expandedAppKey == key) null else key) },
+                                        onCollapse = { setExpandedAppKey(null) },
+                                        viewModel = viewModel,
+                                        selectedTab = detailTabIndex,
+                                        onTabSelected = ::setDetailTabIndex
                                     )
                                 }
                             }
@@ -510,20 +595,26 @@ private fun AccountGroupHeader(
 ) {
     Card(
         Modifier.fillMaxWidth().clickable(enabled = toggleEnabled, onClick = onClick),
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+        elevation = CardDefaults.cardElevation(defaultElevation = CardElevation)
     ) {
         Row(
-            Modifier.fillMaxWidth().height(CompactRowHeight).padding(horizontal = 16.dp),
+            Modifier.fillMaxWidth().height(48.dp).padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(
-                Icons.Default.Person,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(16.dp)
-            )
+            // 用首字母头像代替通用人形图标，几个账号之间更容易一眼区分。
+            Box(
+                Modifier.size(26.dp).clip(RoundedCornerShape(13.dp)).background(MaterialTheme.colorScheme.primary),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    name.take(1).uppercase(),
+                    color = MaterialTheme.colorScheme.onPrimary,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
             Spacer(Modifier.width(10.dp))
             // 名称和邮箱不同时，合并成一行显示（省略号截断），避免变成两行撑高整个框。
             Text(
@@ -534,7 +625,15 @@ private fun AccountGroupHeader(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f)
             )
-            Text("$count 个", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.width(6.dp))
+            Box(
+                Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .padding(horizontal = 8.dp, vertical = 3.dp)
+            ) {
+                Text("$count 个", fontSize = 11.sp, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.primary)
+            }
             Spacer(Modifier.width(4.dp))
             Icon(
                 if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
@@ -547,99 +646,59 @@ private fun AccountGroupHeader(
 }
 
 @Composable
-private fun PeriodStats(requests: String, cpu: String, errors: String, workersCount: String) {
+private fun PeriodStats(header: String?, requests: String, cpu: String, errors: String, workersCount: String) {
     Column {
-        Text("今日（UTC）", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 8.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            StatCard("请求", requests, Modifier.weight(1f))
-            StatCard("CPU 时间", cpu, Modifier.weight(1f))
+        if (header != null) {
+            Text(header, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(bottom = 6.dp))
         }
-        Spacer(Modifier.height(8.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            StatCard("错误", errors, Modifier.weight(1f))
-            StatCard("Workers 数量", workersCount, Modifier.weight(1f))
+            StatCard(StatRequestsColor, "请求", requests, Modifier.weight(1f))
+            StatCard(StatCpuColor, "CPU 时间", cpu, Modifier.weight(1f))
+        }
+        Spacer(Modifier.height(6.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            StatCard(StatErrorColor, "错误", errors, Modifier.weight(1f))
+            StatCard(StatWorkersColor, "Workers", workersCount, Modifier.weight(1f))
         }
     }
 }
 
 @Composable
-private fun StatCard(title: String, value: String, modifier: Modifier = Modifier) {
+private fun StatCard(
+    tint: Color,
+    title: String,
+    value: String,
+    modifier: Modifier = Modifier
+) {
     Card(
-        modifier.height(CompactRowHeight),
-        shape = RoundedCornerShape(10.dp),
+        modifier.height(StatCardHeight),
+        shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+        elevation = CardDefaults.cardElevation(defaultElevation = CardElevation)
     ) {
-        Row(
+        // 不再放左侧小图标框，把整张卡的宽度都留给文字，窄屏（多账号并排）也不会被省略号吃掉。
+        Column(
             Modifier.fillMaxSize().padding(horizontal = 12.dp),
-            verticalAlignment = Alignment.CenterVertically
+            verticalArrangement = Arrangement.Center
         ) {
-            Text(title, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
-            Spacer(Modifier.width(6.dp))
+            Text(title, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(
                 value,
                 fontWeight = FontWeight.Bold,
-                fontSize = 13.sp,
+                fontSize = 15.sp,
                 maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+                overflow = TextOverflow.Ellipsis,
+                color = tint
             )
-        }
-    }
-}
-
-@Composable
-private fun CompactSearchField(
-    value: String,
-    onValueChange: (String) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Box(
-        modifier
-            .fillMaxWidth()
-            .height(CompactRowHeight)
-            .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surface)
-            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(12.dp))
-            .padding(horizontal = 12.dp)
-    ) {
-        Row(
-            Modifier.fillMaxSize(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                Icons.Default.Search,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(16.dp)
-            )
-            Spacer(Modifier.width(8.dp))
-            Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
-                if (value.isEmpty()) {
-                    Text(
-                        "搜索应用程序",
-                        fontSize = 13.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                BasicTextField(
-                    value = value,
-                    onValueChange = onValueChange,
-                    singleLine = true,
-                    textStyle = LocalTextStyle.current.copy(
-                        fontSize = 13.sp,
-                        color = MaterialTheme.colorScheme.onSurface
-                    ),
-                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
         }
     }
 }
 
 /**
  * 一个 Worker/Pages 条目 + 它展开时的详情内容。跟账号折叠一样：点条目原地展开/收起，
- * 不跳转到新页面；展开的排版是标签栏 + 可左右划动的内容（见 WorkerDetailContent）。
+ * 不跳转到新页面，展开/收起都带一个平滑的高度动画；展开的排版是竖排的手风琴标签
+ * （概述/指标/部署…，见 WorkerDetailContent）。上传/下载脚本的按钮就放在这一条折叠条上
+ * （只在展开时显示），点了之后原地弹出确认/结果对话框，不需要再进到某个标签页里找。
  */
 @Composable
 private fun AppRow(
@@ -647,23 +706,156 @@ private fun AppRow(
     expanded: Boolean,
     onToggle: () -> Unit,
     onCollapse: () -> Unit,
-    viewModel: MainViewModel
+    viewModel: MainViewModel,
+    selectedTab: Int? = null,
+    onTabSelected: (Int?) -> Unit = {}
 ) {
+    // 上传/下载相关的状态、系统文件选择器、确认/结果弹窗，都只在这一条"展开着"的时候才挂载——
+    // 全部 Worker 共用同一份 viewModel 状态，如果每一行都订阅，收起的那些行也会一起弹出对话框。
+    var onUploadClick: () -> Unit = {}
+    var onDownloadClick: () -> Unit = {}
+    var actionsBusy = false
+
+    if (expanded) {
+        val context = LocalContext.current
+        val uploadState by viewModel.uploadState.collectAsState()
+        val downloadState by viewModel.downloadState.collectAsState()
+        var showPagesUnsupported by remember { mutableStateOf(false) }
+        var showPagesDownloadUnsupported by remember { mutableStateOf(false) }
+
+        val filePicker = rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.OpenDocument()
+        ) { uri: Uri? ->
+            uri?.let { viewModel.onScriptSelected(it, context) }
+        }
+
+        // 下载脚本时，把内容存到用户在系统文件选择器里挑选的位置
+        val saveLocationPicker = rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.CreateDocument("application/javascript")
+        ) { uri: Uri? ->
+            if (uri != null) viewModel.saveDownloadedScript(uri, context)
+            else viewModel.clearDownloadState()
+        }
+
+        // 脚本下载完成（DownloadState.Ready）后，立即弹出"选择保存位置"的系统对话框
+        LaunchedEffect(downloadState) {
+            val ready = downloadState as? MainViewModel.DownloadState.Ready
+            if (ready != null) saveLocationPicker.launch(ready.fileName)
+        }
+
+        if (uploadState is MainViewModel.UploadState.Selected) {
+            val selected = uploadState as MainViewModel.UploadState.Selected
+            AlertDialog(
+                onDismissRequest = { viewModel.clearUploadState() },
+                title = { Text("确认上传") },
+                text = { Text("确认上传 ${selected.fileName} 并部署到「${app.name}」吗？") },
+                confirmButton = {
+                    TextButton(onClick = { viewModel.confirmUploadScript(app.name, context) }) { Text("确认上传") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { viewModel.clearUploadState() }) { Text("取消") }
+                }
+            )
+        }
+
+        if (uploadState is MainViewModel.UploadState.Success || uploadState is MainViewModel.UploadState.Error) {
+            val isSuccess = uploadState is MainViewModel.UploadState.Success
+            val message = when (val s = uploadState) {
+                is MainViewModel.UploadState.Success -> s.message
+                is MainViewModel.UploadState.Error -> s.message
+                else -> ""
+            }
+            AlertDialog(
+                onDismissRequest = { viewModel.clearUploadState() },
+                title = { Text(if (isSuccess) "部署成功" else "部署失败") },
+                text = { Text(message) },
+                confirmButton = {
+                    TextButton(onClick = { viewModel.clearUploadState() }) { Text("确定") }
+                }
+            )
+        }
+
+        if (showPagesUnsupported) {
+            AlertDialog(
+                onDismissRequest = { showPagesUnsupported = false },
+                title = { Text("暂不支持") },
+                text = { Text("Pages 项目部署流程较复杂，当前版本仅支持 Workers 单文件脚本上传。") },
+                confirmButton = {
+                    TextButton(onClick = { showPagesUnsupported = false }) { Text("知道了") }
+                }
+            )
+        }
+
+        if (showPagesDownloadUnsupported) {
+            AlertDialog(
+                onDismissRequest = { showPagesDownloadUnsupported = false },
+                title = { Text("暂不支持") },
+                text = { Text("Pages 项目没有单一脚本文件，当前版本仅支持下载 Workers 的脚本代码。") },
+                confirmButton = {
+                    TextButton(onClick = { showPagesDownloadUnsupported = false }) { Text("知道了") }
+                }
+            )
+        }
+
+        if (downloadState is MainViewModel.DownloadState.Success || downloadState is MainViewModel.DownloadState.Error) {
+            val isSuccess = downloadState is MainViewModel.DownloadState.Success
+            val message = when (val s = downloadState) {
+                is MainViewModel.DownloadState.Success -> s.message
+                is MainViewModel.DownloadState.Error -> s.message
+                else -> ""
+            }
+            AlertDialog(
+                onDismissRequest = { viewModel.clearDownloadState() },
+                title = { Text(if (isSuccess) "下载完成" else "下载失败") },
+                text = { Text(message) },
+                confirmButton = {
+                    TextButton(onClick = { viewModel.clearDownloadState() }) { Text("确定") }
+                }
+            )
+        }
+
+        onUploadClick = {
+            if (app.isPages) showPagesUnsupported = true
+            else filePicker.launch(arrayOf("application/javascript", "text/javascript", "text/plain"))
+        }
+        onDownloadClick = {
+            if (app.isPages) showPagesDownloadUnsupported = true
+            else viewModel.downloadScript(app.name)
+        }
+        actionsBusy = uploadState is MainViewModel.UploadState.Loading || downloadState is MainViewModel.DownloadState.Loading
+    }
+
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        AppListItem(app = app, expanded = expanded, onClick = onToggle)
-        if (expanded) {
+        AppListItem(
+            app = app,
+            expanded = expanded,
+            onClick = onToggle,
+            showActions = expanded,
+            actionsBusy = actionsBusy,
+            onUploadClick = onUploadClick,
+            onDownloadClick = onDownloadClick
+        )
+        // 用展开动画代替直接 if 判断显示/隐藏：卡片是从条目下方原地、渐渐撑开高度出现的，
+        // 而不是点一下就整块"跳"出来；收起时同理是慢慢收回去。
+        AnimatedVisibility(
+            visible = expanded,
+            enter = expandVertically(expandFrom = Alignment.Top) + fadeIn(),
+            exit = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut()
+        ) {
             Card(
                 Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp),
+                shape = RoundedCornerShape(14.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+                elevation = CardDefaults.cardElevation(defaultElevation = CardElevation)
             ) {
                 WorkerDetailContent(
                     appName = app.name,
                     isPages = app.isPages,
                     accountId = app.accountId,
                     viewModel = viewModel,
-                    onWorkerDeleted = onCollapse
+                    onWorkerDeleted = onCollapse,
+                    selectedTab = selectedTab,
+                    onTabSelected = onTabSelected
                 )
             }
         }
@@ -671,22 +863,33 @@ private fun AppRow(
 }
 
 @Composable
-private fun AppListItem(app: CloudflareApi.AppItem, expanded: Boolean, onClick: () -> Unit) {
+private fun AppListItem(
+    app: CloudflareApi.AppItem,
+    expanded: Boolean,
+    onClick: () -> Unit,
+    showActions: Boolean = false,
+    actionsBusy: Boolean = false,
+    onUploadClick: () -> Unit = {},
+    onDownloadClick: () -> Unit = {}
+) {
+    // Pages 用紫色系图标、Worker 用蓝色系图标，跟"今日"卡片一样靠颜色而不是纯文字区分类型。
+    val (icon, tint) = if (app.isPages) Icons.Outlined.Language to Color(0xFF534AB7)
+                        else Icons.Outlined.Description to Color(0xFF185FA5)
     Card(
-        Modifier.fillMaxWidth().height(CompactRowHeight).clickable(onClick = onClick),
-        shape = RoundedCornerShape(12.dp),
+        Modifier.fillMaxWidth().height(48.dp).clickable(onClick = onClick),
+        shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+        elevation = CardDefaults.cardElevation(defaultElevation = CardElevation)
     ) {
         Row(
             Modifier.fillMaxSize().padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box(
-                Modifier.size(20.dp).clip(RoundedCornerShape(5.dp)).background(Color(0xFFE8F0FE)),
+                Modifier.size(26.dp).clip(RoundedCornerShape(8.dp)).background(tint.copy(alpha = 0.12f)),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(Icons.Outlined.Description, null, tint = MaterialTheme.colorScheme.secondary, modifier = Modifier.size(13.dp))
+                Icon(icon, null, tint = tint, modifier = Modifier.size(15.dp))
             }
             Spacer(Modifier.width(10.dp))
             // 只显示 Worker/Pages 名称，跟账号折叠头一样只占一行，高度也对齐到 CompactRowHeight。
@@ -698,7 +901,20 @@ private fun AppListItem(app: CloudflareApi.AppItem, expanded: Boolean, onClick: 
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f)
             )
-            Spacer(Modifier.width(4.dp))
+            // 上传/下载脚本的入口就放在这条折叠条上，只在这个 Worker 展开时才显示，
+            // 收起状态下不占地方，也不会跟一堆折叠箭头混在一起分不清是干什么用的。
+            if (showActions) {
+                if (actionsBusy) {
+                    CircularProgressIndicator(Modifier.size(16.dp).padding(end = 6.dp), strokeWidth = 2.dp)
+                }
+                IconButton(onClick = onUploadClick, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.Filled.FileUpload, contentDescription = "上传文件部署", modifier = Modifier.size(18.dp))
+                }
+                IconButton(onClick = onDownloadClick, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.Filled.FileDownload, contentDescription = "下载代码", modifier = Modifier.size(18.dp))
+                }
+            }
+            Spacer(Modifier.width(32.dp))
             Icon(
                 if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
                 contentDescription = if (expanded) "折叠" else "展开",
