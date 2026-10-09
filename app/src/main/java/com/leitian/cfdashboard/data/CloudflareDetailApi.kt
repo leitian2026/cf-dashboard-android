@@ -376,7 +376,7 @@ object CloudflareDetailApi {
     /** 把 BindingItem 列表还原成可提交的 JSONArray（未改动的用 rawJson 原样带回） */
     private fun bindingsToJsonArray(bindings: List<BindingItem>): JSONArray {
         val arr = JSONArray()
-        bindings.forEach { arr.put(JSONObject(it.rawJson)) }
+        bindings.forEach { arr.put(bindingForResubmit(JSONObject(it.rawJson))) }
         return arr
     }
 
@@ -449,7 +449,7 @@ object CloudflareDetailApi {
             put("text", newValue)
         }
         val mergedArr = JSONArray()
-        kept.forEach { mergedArr.put(JSONObject(it.rawJson)) }
+        kept.forEach { mergedArr.put(bindingForResubmit(JSONObject(it.rawJson))) }
         mergedArr.put(newBindingJson)
         val body = JSONObject().put("bindings", mergedArr)
         return patchSettings(email, apiKey, accountId, scriptName, body)
@@ -510,21 +510,155 @@ object CloudflareDetailApi {
         return patchSettings(email, apiKey, accountId, scriptName, body)
     }
 
-    /** 删除 Worker */
+    /** 读取某个 Worker 的 settings 原文（失败返回 null） */
+    private fun fetchSettingsBody(email: String, apiKey: String, accountId: String, scriptName: String): String? {
+        return try {
+            val resp = client.newCall(authGet(email, apiKey, "$BASE/accounts/$accountId/workers/scripts/$scriptName/settings")).execute()
+            val body = resp.body?.string() ?: ""
+            if (resp.isSuccessful && JSONObject(body).optBoolean("success", false)) body else null
+        } catch (e: Exception) { null }
+    }
+
+    /** Worker 绑定的可删除资源：kind = kv / d1 / r2；key = KV/D1 的 ID，或 R2 的存储桶名 */
+    private data class BoundRes(val kind: String, val key: String) {
+        val id: String get() = "$kind:${key.lowercase()}"
+        val kindName: String get() = when (kind) { "kv" -> "KV 命名空间"; "d1" -> "D1 数据库"; else -> "R2 存储桶" }
+    }
+
+    private fun parseBoundResources(settingsBody: String): List<BoundRes> {
+        val arr = JSONObject(settingsBody).optJSONObject("result")?.optJSONArray("bindings") ?: JSONArray()
+        val out = linkedMapOf<String, BoundRes>()
+        for (i in 0 until arr.length()) {
+            val bd = arr.getJSONObject(i)
+            val r = when (bd.optString("type")) {
+                "kv_namespace" -> bd.optString("namespace_id").takeIf { it.isNotBlank() }?.let { BoundRes("kv", it) }
+                "d1" -> bd.optString("id").takeIf { it.isNotBlank() }?.let { BoundRes("d1", it) }
+                "r2_bucket" -> bd.optString("bucket_name").takeIf { it.isNotBlank() }?.let { BoundRes("r2", it) }
+                else -> null
+            }
+            if (r != null) out.putIfAbsent(r.id, r)
+        }
+        return out.values.toList()
+    }
+
+    /**
+     * 删除 Worker；deleteResources 为 true 时，顺带删除它绑定的 KV 命名空间 / D1 数据库 / R2 存储桶。
+     * 安全规则：
+     *  - 先读出它绑定了哪些资源；读不出来就整体取消（不会只删一半）。没有绑定任何资源时，只删 Worker。
+     *  - 只删"独占"的：账号下其他 Worker、Pages 项目只要还引用同一个资源，就保留，并在结果里说明。
+     *    只要有一个检查读不出来，就当作"可能还在用"，全部保留。
+     *  - 先删 Worker，成功后才删资源；Worker 删除失败则一个资源都不动。
+     *  - R2 存储桶非空时 Cloudflare 会拒绝删除，这里不会去清空里面的文件，只提示手动处理。
+     * 返回值是要展示给用户的说明行（没有资源时为空）。
+     */
     suspend fun deleteWorker(
         email: String,
         apiKey: String,
         accountId: String,
-        scriptName: String
-    ): ApiResult<Unit> = withContext(Dispatchers.IO) {
+        scriptName: String,
+        deleteResources: Boolean = false
+    ): ApiResult<List<String>> = withContext(Dispatchers.IO) {
         try {
+            var resources: List<BoundRes> = emptyList()
+            val keepReasons = mutableMapOf<String, String>() // BoundRes.id -> 保留原因
+            var globalKeepReason: String? = null
+
+            if (deleteResources) {
+                val mine = fetchSettingsBody(email, apiKey, accountId, scriptName)
+                    ?: return@withContext ApiResult(false, error = "读取该 Worker 的绑定失败，为避免留下找不到的资源，已取消删除。可取消勾选「同时删除绑定的资源」后再删除。")
+                resources = parseBoundResources(mine)
+
+                if (resources.isNotEmpty()) {
+                    // 其他 Worker 是否还在用
+                    try {
+                        val listResp = client.newCall(authGet(email, apiKey, "$BASE/accounts/$accountId/workers/scripts")).execute()
+                        val listBody = listResp.body?.string() ?: ""
+                        if (!listResp.isSuccessful) throw RuntimeException("列出 Worker 失败 (${listResp.code})")
+                        val others = JSONObject(listBody).optJSONArray("result") ?: JSONArray()
+                        for (i in 0 until others.length()) {
+                            val id = others.getJSONObject(i).optString("id")
+                            if (id.isBlank() || id == scriptName) continue
+                            val body = fetchSettingsBody(email, apiKey, accountId, id)
+                                ?: throw RuntimeException("读取 Worker「$id」的绑定失败")
+                            val used = parseBoundResources(body).map { it.id }.toSet()
+                            resources.forEach { r -> if (r.id in used) keepReasons.putIfAbsent(r.id, "仍被 Worker「$id」使用") }
+                        }
+                    } catch (e: Exception) {
+                        globalKeepReason = "无法确认其他 Worker 是否还在使用（${e.message}）"
+                    }
+                    // Pages 项目是否还在用（Pages 的绑定在项目配置里，直接在列表原文里找，宁可多保留）
+                    try {
+                        val pr = client.newCall(authGet(email, apiKey, "$BASE/accounts/$accountId/pages/projects?per_page=100")).execute()
+                        val pb = pr.body?.string() ?: ""
+                        if (!pr.isSuccessful) throw RuntimeException("列出 Pages 项目失败 (${pr.code})")
+                        val pbn = pb.replace(Regex("\\s"), "")
+                        resources.forEach { r ->
+                            val hit = if (r.kind == "r2") pbn.contains("\"name\":\"${r.key}\"") || pbn.contains("\"bucket_name\":\"${r.key}\"")
+                                      else pbn.contains(r.key, ignoreCase = true)
+                            if (hit) keepReasons.putIfAbsent(r.id, "仍被某个 Pages 项目使用")
+                        }
+                    } catch (e: Exception) {
+                        if (globalKeepReason == null) globalKeepReason = "无法确认 Pages 项目是否还在使用（${e.message}）"
+                    }
+                }
+            }
+
+            // 先查名称（删除后就查不到了），仅用于说明
+            val titles = mutableMapOf<String, String>()
+            resources.forEach { r ->
+                try {
+                    val url = when (r.kind) {
+                        "kv" -> "$BASE/accounts/$accountId/storage/kv/namespaces/${r.key}"
+                        "d1" -> "$BASE/accounts/$accountId/d1/database/${r.key}"
+                        else -> null
+                    }
+                    if (url != null) {
+                        val rr = client.newCall(authGet(email, apiKey, url)).execute()
+                        val rb = rr.body?.string() ?: ""
+                        if (rr.isSuccessful) {
+                            val res = JSONObject(rb).optJSONObject("result")
+                            val t = if (r.kind == "kv") res?.optString("title") else res?.optString("name")
+                            if (!t.isNullOrBlank()) titles[r.id] = t
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
+            fun label(r: BoundRes) = if (r.kind == "r2") "${r.kindName}「${r.key}」" else titles[r.id]?.let { "${r.kindName}「$it」（${r.key}）" } ?: "${r.kindName} ${r.key}"
+
+            // 删除 Worker
             val req = authDelete(email, apiKey, "$BASE/accounts/$accountId/workers/scripts/$scriptName")
             val resp = client.newCall(req).execute()
             val body = resp.body?.string() ?: ""
             if (!resp.isSuccessful) return@withContext ApiResult(false, error = "删除失败 (${resp.code})：${parseCfError(body)}")
             val json = JSONObject(body)
             if (!json.optBoolean("success", false)) return@withContext ApiResult(false, error = parseCfError(body))
-            ApiResult(true, Unit)
+
+            // 删除独占的资源
+            val notes = mutableListOf<String>()
+            for (r in resources) {
+                val keep = globalKeepReason ?: keepReasons[r.id]
+                if (keep != null) { notes.add("已保留${label(r)}：$keep，请自行确认后手动删除。"); continue }
+                try {
+                    val url = when (r.kind) {
+                        "kv" -> "$BASE/accounts/$accountId/storage/kv/namespaces/${r.key}"
+                        "d1" -> "$BASE/accounts/$accountId/d1/database/${r.key}"
+                        else -> "$BASE/accounts/$accountId/r2/buckets/${r.key}"
+                    }
+                    val dr = client.newCall(authDelete(email, apiKey, url)).execute()
+                    val db = dr.body?.string() ?: ""
+                    val err = parseCfError(db)
+                    when {
+                        dr.isSuccessful -> notes.add("已删除${label(r)}。")
+                        dr.code == 404 -> notes.add("${label(r)}已经不存在，无需删除。")
+                        r.kind == "r2" && err.contains("not empty", ignoreCase = true) ->
+                            notes.add("${label(r)}里还有文件，Cloudflare 不允许删除非空存储桶。为避免误删数据，没有自动清空，请手动清空后再删除。")
+                        else -> notes.add("${label(r)}删除失败 (${dr.code})：$err，请手动删除。")
+                    }
+                } catch (e: Exception) {
+                    notes.add("${label(r)}删除失败：${e.message ?: "网络错误"}，请手动删除。")
+                }
+            }
+            ApiResult(true, notes)
         } catch (e: Exception) {
             ApiResult(false, error = e.message ?: "网络错误")
         }
