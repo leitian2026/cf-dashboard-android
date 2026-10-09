@@ -336,49 +336,21 @@ object CloudflareApi {
         email: String, apiKey: String, accountId: String, scriptName: String, fileName: String, bytes: ByteArray
     ): ApiResult<Unit> = withContext(Dispatchers.IO) {
         try {
-            // CF 的 PUT /workers/scripts/{name} 是整体替换 metadata 的:凡是没有出现在
-            // 这次提交的 metadata 里的字段(bindings 里的变量/Secret、compatibility_flags、
-            // placement、observability 等),都会被直接清空,不是"只改动提到的部分"。
-            // 所以这里先读一遍这个 Worker 当前的 settings,把已知这几项原样带回去,
-            // 只换 main_module 和脚本内容本身,其余配置维持不变。
+            // 只替换脚本代码，不碰其他任何配置：
+            // 使用 PUT /workers/scripts/{name}/content（"Put script content"）。
+            // 这个接口只更新代码，已有的 bindings（KV/R2/D1/变量/Secret）、compatibility_date/flags、
+            // observability、placement、Cron 触发器、域名路由等全部保持原样，
+            // 不像 PUT /workers/scripts/{name} 那样会整体替换并重新校验 metadata。
+            // 所以这里也不再需要先读取 settings 再原样带回去。
             //
-            // 注意:Cron 触发器(schedules)不在这个 settings 对象里,是完全独立的接口,
-            // 本来就不受这次上传影响。
-            val settingsReq = Request.Builder()
-                .url("$BASE/accounts/$accountId/workers/scripts/$scriptName/settings")
-                .addHeader("X-Auth-Email", email).addHeader("X-Auth-Key", apiKey).get().build()
-            val settingsResp = client.newCall(settingsReq).await()
-            val settingsBody = settingsResp.body?.string() ?: ""
-            if (!settingsResp.isSuccessful) {
-                return@withContext ApiResult(false, error = "上传前读取现有设置失败 (${settingsResp.code})，为避免误清空其他配置已取消上传")
-            }
-            val settingsJson = JSONObject(settingsBody)
-            if (!settingsJson.optBoolean("success", false)) {
-                val err = settingsJson.optJSONArray("errors")?.optJSONObject(0)?.optString("message")
-                return@withContext ApiResult(false, error = "上传前读取现有设置失败：${err ?: "未知错误"}，为避免误清空其他配置已取消上传")
-            }
-            val existing = settingsJson.optJSONObject("result") ?: JSONObject()
-
-            // 模块名固定写死成 worker.js,不用本地选中文件的真实文件名——
-            // 这样不管上传的文件叫什么(带空格、中文、括号等特殊字符都行),
-            // 都不会因为文件名本身导致 multipart part 名字和 main_module 对不上而报错。
-            val metadata = JSONObject().put("main_module", "worker.js")
-            if (existing.has("bindings")) metadata.put("bindings", existing.getJSONArray("bindings"))
-            if (existing.has("compatibility_date")) metadata.put("compatibility_date", existing.getString("compatibility_date"))
-            if (existing.has("compatibility_flags")) metadata.put("compatibility_flags", existing.getJSONArray("compatibility_flags"))
-            if (existing.has("usage_model")) metadata.put("usage_model", existing.getString("usage_model"))
-            if (existing.has("placement")) metadata.put("placement", existing.getJSONObject("placement"))
-            if (existing.has("tags")) metadata.put("tags", existing.getJSONArray("tags"))
-            if (existing.has("observability")) metadata.put("observability", existing.getJSONObject("observability"))
-            if (existing.has("logpush")) metadata.put("logpush", existing.getBoolean("logpush"))
-            if (existing.has("limits")) metadata.put("limits", existing.getJSONObject("limits"))
-            if (!metadata.has("compatibility_date")) metadata.put("compatibility_date", "2024-01-01")
-
+            // 模块名固定写死成 worker.js，不用本地选中文件的真实文件名——
+            // 文件名带空格、中文、括号等特殊字符都不会导致 part 名字和 main_module 对不上。
+            val metadataJson = JSONObject().put("main_module", "worker.js").toString()
             val body = MultipartBody.Builder().setType(MultipartBody.FORM)
                 .addFormDataPart(
                     "metadata",
                     null,
-                    metadata.toString().toRequestBody("application/json".toMediaType())
+                    metadataJson.toRequestBody("application/json".toMediaType())
                 )
                 .addFormDataPart(
                     "worker.js",
@@ -386,13 +358,20 @@ object CloudflareApi {
                     bytes.toRequestBody("application/javascript+module".toMediaType())
                 )
                 .build()
-            val req = Request.Builder().url("$BASE/accounts/$accountId/workers/scripts/$scriptName")
+            val req = Request.Builder().url("$BASE/accounts/$accountId/workers/scripts/$scriptName/content")
                 .addHeader("X-Auth-Email", email).addHeader("X-Auth-Key", apiKey).put(body).build()
             val resp = client.newCall(req).await()
             val respBody = resp.body?.string() ?: ""
             if (!resp.isSuccessful) {
                 val err = try { JSONObject(respBody).optJSONArray("errors")?.optJSONObject(0)?.optString("message") } catch (_: Exception) { null }
-                return@withContext ApiResult(false, error = err ?: "上传失败 (${resp.code})")
+                val hint = if (resp.code == 404) "（Worker 不存在或无权限）" else ""
+                return@withContext ApiResult(false, error = (err ?: "上传失败 (${resp.code})") + hint)
+            }
+            // 2xx 但 success=false 的情况也要当作失败，避免界面误报"部署成功"
+            val ok = try { JSONObject(respBody).optBoolean("success", true) } catch (_: Exception) { true }
+            if (!ok) {
+                val err = try { JSONObject(respBody).optJSONArray("errors")?.optJSONObject(0)?.optString("message") } catch (_: Exception) { null }
+                return@withContext ApiResult(false, error = err ?: "上传失败")
             }
             ApiResult(true, Unit)
         } catch (e: CancellationException) { throw e } catch (e: Exception) {
