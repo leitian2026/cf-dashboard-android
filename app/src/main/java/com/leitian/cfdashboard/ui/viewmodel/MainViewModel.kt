@@ -94,6 +94,12 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
     private val _cronWriteState = MutableStateFlow<WriteState>(WriteState.Idle)
     val cronWriteState: StateFlow<WriteState> = _cronWriteState.asStateFlow()
 
+    // 删除 Worker 后关于绑定资源（KV/D1/R2）的说明（删了/保留了哪些）。放在首页弹窗显示，
+    // 不能放在详情页里——Worker 删掉后详情页会收起，弹窗跟着消失。clearDetail 不会清它。
+    private val _deleteNotice = MutableStateFlow<String?>(null)
+    val deleteNotice: StateFlow<String?> = _deleteNotice.asStateFlow()
+    fun clearDeleteNotice() { _deleteNotice.value = null }
+
     private val _deleteWorkerState = MutableStateFlow<WriteState>(WriteState.Idle)
     val deleteWorkerState: StateFlow<WriteState> = _deleteWorkerState.asStateFlow()
 
@@ -729,13 +735,18 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
         }
     }
 
-    fun deleteWorker(scriptName: String, onSuccess: () -> Unit) {
+    fun deleteWorker(scriptName: String, deleteResources: Boolean, onSuccess: () -> Unit) {
         val e = email; val k = apiKey; val a = accountId
         if (e == null || k == null || a == null) { _deleteWorkerState.value = WriteState.Error("未登录"); return }
         viewModelScope.launch {
             _deleteWorkerState.value = WriteState.Loading
-            val result = CloudflareDetailApi.deleteWorker(e, k, a, scriptName)
-            if (result.success) { _deleteWorkerState.value = WriteState.Success("已删除"); loadApps(); onSuccess() }
+            val result = CloudflareDetailApi.deleteWorker(e, k, a, scriptName, deleteResources)
+            if (result.success) {
+                _deleteWorkerState.value = WriteState.Success("已删除")
+                val notes = result.data.orEmpty()
+                if (notes.isNotEmpty()) _deleteNotice.value = "已删除 Worker「$scriptName」。\n\n" + notes.joinToString("\n")
+                loadApps(); onSuccess()
+            }
             else _deleteWorkerState.value = WriteState.Error(result.error ?: "删除失败")
         }
     }
