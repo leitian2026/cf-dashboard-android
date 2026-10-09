@@ -689,6 +689,8 @@ private fun SettingsTab(
     var deleteTargetCron by remember { mutableStateOf<String?>(null) }
 
     var showDeleteWorker by remember { mutableStateOf(false) }
+    // 删除 Worker 时是否顺带删除它绑定的 KV / D1 / R2（默认勾选；仍被其他 Worker/Pages 使用的会自动保留）
+    var deleteResToo by remember { mutableStateOf(true) }
 
     // 写操作结果提示（成功/失败都用同一个轻量 Snackbar 式 AlertDialog，跟现有上传部署的反馈风格保持一致）
     WriteResultDialog(variableWriteState, onDismiss = { viewModel.clearVariableWriteState() })
@@ -745,7 +747,19 @@ private fun SettingsTab(
             message = "此操作会永久删除「$appName」，无法恢复。",
             requireTypedName = appName,
             loading = deleteWorkerState is WriteState.Loading,
-            onConfirm = { viewModel.deleteWorker(appName, onSuccess = onWorkerDeleted) },
+            extraContent = {
+                Row(
+                    Modifier.fillMaxWidth().clickable { deleteResToo = !deleteResToo },
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Checkbox(checked = deleteResToo, onCheckedChange = { deleteResToo = it })
+                    Text(
+                        "同时删除它绑定的 KV、D1、R2（数据永久丢失；仍被其他 Worker 或 Pages 使用的会自动保留；非空的 R2 桶不会清空，需手动处理）",
+                        fontSize = 12.sp
+                    )
+                }
+            },
+            onConfirm = { viewModel.deleteWorker(appName, deleteResToo, onSuccess = onWorkerDeleted) },
             onDismiss = { showDeleteWorker = false }
         )
     }
