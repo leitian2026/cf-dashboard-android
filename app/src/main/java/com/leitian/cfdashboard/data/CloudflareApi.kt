@@ -332,25 +332,96 @@ object CloudflareApi {
             }
         }
 
+    /**
+     * 把 Cloudflare 返回的英文报错翻成中文原因，方便直接看懂为什么上传/部署失败。
+     * 认不出来的报错会保留原文，只在前面加上中文前缀，不会丢信息。
+     */
+    private fun cnDeployError(raw: String?): String {
+        val msg = raw?.trim().orEmpty()
+        if (msg.isEmpty()) return "上传失败（Cloudflare 没有返回原因）"
+        val opt = RegexOption.IGNORE_CASE
+
+        // KV 命名空间不存在（两种说法：上传校验 / 回滚旧版本校验）
+        Regex("""KV namespace '([0-9a-f]+)' not found""", opt).find(msg)?.let {
+            return "部署失败：这个 Worker 绑定的 KV 命名空间（ID ${it.groupValues[1]}）不存在。" +
+                "可能已经被删除，或者不属于当前账号。请先到「绑定」页把这个 KV 绑定改成存在的命名空间，或者删除该绑定，然后再部署。"
+        }
+        Regex("""binding "([^"]+)" references KV Namespace "([0-9a-f]+)" that no longer exists""", opt).find(msg)?.let {
+            return "部署失败：绑定 ${it.groupValues[1]} 引用的 KV 命名空间（ID ${it.groupValues[2]}）已经不存在。" +
+                "请先到「绑定」页修改或删除这个绑定，再重新部署。"
+        }
+        // D1 / R2 / 队列等其他资源绑定
+        Regex("""D1 database.*(not found|no longer exists)""", opt).find(msg)?.let {
+            return "部署失败：绑定的 D1 数据库不存在（可能已被删除或不属于当前账号）。请先到「绑定」页修改或删除该绑定。"
+        }
+        Regex("""R2 bucket.*(not found|no longer exists|does not exist)""", opt).find(msg)?.let {
+            return "部署失败：绑定的 R2 存储桶不存在（可能已被删除或不属于当前账号）。请先到「绑定」页修改或删除该绑定。"
+        }
+        Regex("""binding.*(no longer exists|not found)""", opt).find(msg)?.let {
+            return "部署失败：Worker 上有绑定引用了已不存在的资源。请先到「绑定」页检查并修改或删除失效的绑定。（原文：$msg）"
+        }
+        if (msg.contains("Unexpected token 'export'", ignoreCase = true)) {
+            return "部署失败：脚本是旧式 Service Worker 写法，但被当作模块处理了，请确认脚本是 export default 写法。（原文：$msg）"
+        }
+        if (msg.contains("SyntaxError", ignoreCase = true) || msg.contains("Unexpected token", ignoreCase = true)) {
+            return "部署失败：脚本有语法错误，Cloudflare 无法解析。（原文：$msg）"
+        }
+        if (msg.contains("too large", ignoreCase = true) || msg.contains("script_too_large", ignoreCase = true)) {
+            return "部署失败：脚本文件太大，超出了当前套餐允许的大小。（原文：$msg）"
+        }
+        if (msg.contains("Authentication error", ignoreCase = true) || msg.contains("Unauthorized", ignoreCase = true)) {
+            return "部署失败：认证失败，请检查邮箱和 Global API Key 是否正确、是否有权限操作这个账号。（原文：$msg）"
+        }
+        return "部署失败（Cloudflare 返回）：$msg"
+    }
+
     suspend fun uploadWorkerScript(
         email: String, apiKey: String, accountId: String, scriptName: String, fileName: String, bytes: ByteArray
     ): ApiResult<Unit> = withContext(Dispatchers.IO) {
         try {
-            // 只替换脚本代码，不碰其他任何配置：
-            // 使用 PUT /workers/scripts/{name}/content（"Put script content"）。
-            // 这个接口只更新代码，已有的 bindings（KV/R2/D1/变量/Secret）、compatibility_date/flags、
-            // observability、placement、Cron 触发器、域名路由等全部保持原样，
-            // 不像 PUT /workers/scripts/{name} 那样会整体替换并重新校验 metadata。
-            // 所以这里也不再需要先读取 settings 再原样带回去。
+            // CF 的 PUT /workers/scripts/{name} 是整体替换 metadata 的:凡是没有出现在
+            // 这次提交的 metadata 里的字段(bindings 里的变量/Secret、compatibility_flags、
+            // placement、observability 等),都会被直接清空,不是"只改动提到的部分"。
+            // 所以这里先读一遍这个 Worker 当前的 settings,把已知这几项原样带回去,
+            // 只换 main_module 和脚本内容本身,其余配置维持不变。
             //
-            // 模块名固定写死成 worker.js，不用本地选中文件的真实文件名——
-            // 文件名带空格、中文、括号等特殊字符都不会导致 part 名字和 main_module 对不上。
-            val metadataJson = JSONObject().put("main_module", "worker.js").toString()
+            // 注意:Cron 触发器(schedules)不在这个 settings 对象里,是完全独立的接口,
+            // 本来就不受这次上传影响。
+            val settingsReq = Request.Builder()
+                .url("$BASE/accounts/$accountId/workers/scripts/$scriptName/settings")
+                .addHeader("X-Auth-Email", email).addHeader("X-Auth-Key", apiKey).get().build()
+            val settingsResp = client.newCall(settingsReq).await()
+            val settingsBody = settingsResp.body?.string() ?: ""
+            if (!settingsResp.isSuccessful) {
+                return@withContext ApiResult(false, error = "上传前读取现有设置失败 (${settingsResp.code})，为避免误清空其他配置已取消上传")
+            }
+            val settingsJson = JSONObject(settingsBody)
+            if (!settingsJson.optBoolean("success", false)) {
+                val err = settingsJson.optJSONArray("errors")?.optJSONObject(0)?.optString("message")
+                return@withContext ApiResult(false, error = "上传前读取现有设置失败：${cnDeployError(err)}（为避免误清空其他配置，已取消上传）")
+            }
+            val existing = settingsJson.optJSONObject("result") ?: JSONObject()
+
+            // 模块名固定写死成 worker.js,不用本地选中文件的真实文件名——
+            // 这样不管上传的文件叫什么(带空格、中文、括号等特殊字符都行),
+            // 都不会因为文件名本身导致 multipart part 名字和 main_module 对不上而报错。
+            val metadata = JSONObject().put("main_module", "worker.js")
+            if (existing.has("bindings")) metadata.put("bindings", existing.getJSONArray("bindings"))
+            if (existing.has("compatibility_date")) metadata.put("compatibility_date", existing.getString("compatibility_date"))
+            if (existing.has("compatibility_flags")) metadata.put("compatibility_flags", existing.getJSONArray("compatibility_flags"))
+            if (existing.has("usage_model")) metadata.put("usage_model", existing.getString("usage_model"))
+            if (existing.has("placement")) metadata.put("placement", existing.getJSONObject("placement"))
+            if (existing.has("tags")) metadata.put("tags", existing.getJSONArray("tags"))
+            if (existing.has("observability")) metadata.put("observability", existing.getJSONObject("observability"))
+            if (existing.has("logpush")) metadata.put("logpush", existing.getBoolean("logpush"))
+            if (existing.has("limits")) metadata.put("limits", existing.getJSONObject("limits"))
+            if (!metadata.has("compatibility_date")) metadata.put("compatibility_date", "2024-01-01")
+
             val body = MultipartBody.Builder().setType(MultipartBody.FORM)
                 .addFormDataPart(
                     "metadata",
                     null,
-                    metadataJson.toRequestBody("application/json".toMediaType())
+                    metadata.toString().toRequestBody("application/json".toMediaType())
                 )
                 .addFormDataPart(
                     "worker.js",
@@ -358,20 +429,13 @@ object CloudflareApi {
                     bytes.toRequestBody("application/javascript+module".toMediaType())
                 )
                 .build()
-            val req = Request.Builder().url("$BASE/accounts/$accountId/workers/scripts/$scriptName/content")
+            val req = Request.Builder().url("$BASE/accounts/$accountId/workers/scripts/$scriptName")
                 .addHeader("X-Auth-Email", email).addHeader("X-Auth-Key", apiKey).put(body).build()
             val resp = client.newCall(req).await()
             val respBody = resp.body?.string() ?: ""
             if (!resp.isSuccessful) {
                 val err = try { JSONObject(respBody).optJSONArray("errors")?.optJSONObject(0)?.optString("message") } catch (_: Exception) { null }
-                val hint = if (resp.code == 404) "（Worker 不存在或无权限）" else ""
-                return@withContext ApiResult(false, error = (err ?: "上传失败 (${resp.code})") + hint)
-            }
-            // 2xx 但 success=false 的情况也要当作失败，避免界面误报"部署成功"
-            val ok = try { JSONObject(respBody).optBoolean("success", true) } catch (_: Exception) { true }
-            if (!ok) {
-                val err = try { JSONObject(respBody).optJSONArray("errors")?.optJSONObject(0)?.optString("message") } catch (_: Exception) { null }
-                return@withContext ApiResult(false, error = err ?: "上传失败")
+                return@withContext ApiResult(false, error = cnDeployError(err ?: "HTTP ${resp.code}"))
             }
             ApiResult(true, Unit)
         } catch (e: CancellationException) { throw e } catch (e: Exception) {
