@@ -522,6 +522,7 @@ fun CfConfirmDangerDialog(
     confirmText: String = "删除",
     requireTypedName: String? = null,
     loading: Boolean = false,
+    extraContent: (@Composable () -> Unit)? = null,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -533,6 +534,10 @@ fun CfConfirmDangerDialog(
         text = {
             Column {
                 Text(message)
+                if (extraContent != null) {
+                    Spacer(Modifier.height(12.dp))
+                    extraContent()
+                }
                 if (requireTypedName != null) {
                     Spacer(Modifier.height(12.dp))
                     Text("请输入「$requireTypedName」以确认", fontSize = 12.sp, color = CfColors.GrayText)
