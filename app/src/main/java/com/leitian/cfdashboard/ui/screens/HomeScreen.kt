@@ -80,6 +80,7 @@ fun HomeScreen(
     val statsErrorByAccount by viewModel.accountStatsErrorByAccount.collectAsState()
     val createLoading by viewModel.createLoading.collectAsState()
     val createError by viewModel.createError.collectAsState()
+    val deleteNotice by viewModel.deleteNotice.collectAsState()
     val accounts by viewModel.accounts.collectAsState()
     // 只登录了一个账号时，界面上不需要额外的账号标签/选择器，保持原来单账号时的简洁样子。
     val multiAccount = accounts.size > 1
@@ -169,6 +170,15 @@ fun HomeScreen(
 
     // 按账号分组（分组内保持原有顺序），组的顺序跟随已登录账号的顺序。
     val groupedApps = remember(filtered) { filtered.groupBy { it.accountId } }
+
+    deleteNotice?.let { notice ->
+        AlertDialog(
+            onDismissRequest = { viewModel.clearDeleteNotice() },
+            title = { Text("删除结果") },
+            text = { Text(notice) },
+            confirmButton = { TextButton(onClick = { viewModel.clearDeleteNotice() }) { Text("确定") } }
+        )
+    }
 
     if (showCreateDialog) {
         AlertDialog(
