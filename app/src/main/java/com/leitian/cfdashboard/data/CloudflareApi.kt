@@ -341,6 +341,9 @@ object CloudflareApi {
         if (msg.isEmpty()) return "上传失败（Cloudflare 没有返回原因）"
         val opt = RegexOption.IGNORE_CASE
 
+        Regex("""missing text property for binding (\S+)""", opt).find(msg)?.let {
+            return "部署失败：绑定 ${it.groupValues[1]} 是 Secret（密钥），读取设置时拿不到它的值，提交时缺少内容。（原文：$msg）"
+        }
         // KV 命名空间不存在（两种说法：上传校验 / 回滚旧版本校验）
         Regex("""KV namespace '([0-9a-f]+)' not found""", opt).find(msg)?.let {
             return "部署失败：这个 Worker 绑定的 KV 命名空间（ID ${it.groupValues[1]}）不存在。" +
@@ -406,7 +409,12 @@ object CloudflareApi {
             // 这样不管上传的文件叫什么(带空格、中文、括号等特殊字符都行),
             // 都不会因为文件名本身导致 multipart part 名字和 main_module 对不上而报错。
             val metadata = JSONObject().put("main_module", "worker.js")
-            if (existing.has("bindings")) metadata.put("bindings", existing.getJSONArray("bindings"))
+            if (existing.has("bindings")) {
+                val src = existing.getJSONArray("bindings")
+                val arr = org.json.JSONArray()
+                for (i in 0 until src.length()) arr.put(bindingForResubmit(src.getJSONObject(i)))
+                metadata.put("bindings", arr)
+            }
             if (existing.has("compatibility_date")) metadata.put("compatibility_date", existing.getString("compatibility_date"))
             if (existing.has("compatibility_flags")) metadata.put("compatibility_flags", existing.getJSONArray("compatibility_flags"))
             if (existing.has("usage_model")) metadata.put("usage_model", existing.getString("usage_model"))
