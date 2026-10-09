@@ -486,8 +486,10 @@ class MainViewModel(private val tokenStore: TokenStore) : ViewModel() {
      * 加一个 expectedScriptName 做校验：只有当共享状态确实还是"我"这个 Worker 的时候才真的清，
      * 如果已经被新 Worker 接管了，这次 dispose 就当没发生。
      */
-    fun clearDetail(expectedScriptName: String? = null) {
+    fun clearDetail(expectedScriptName: String? = null, expectedAccountId: String? = null) {
         if (expectedScriptName != null && currentScriptName != expectedScriptName) return
+        // 不同账号下可能有同名 Worker：名字一致时还要核对账号，避免收起旧的那个时抹掉刚展开的另一个账号的同名 Worker 状态
+        if (expectedAccountId != null && accountId != expectedAccountId) return
         loadTabJob?.cancel(); loadTabJob = null
         dataTypeJobs.values.forEach { it.cancel() }; dataTypeJobs.clear()
         loadedDataTypes.clear()
